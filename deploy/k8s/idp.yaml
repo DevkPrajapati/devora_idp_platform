@@ -1,0 +1,371 @@
+# Kubernetes manifests for the IDP control plane itself.
+#
+#   kubectl apply -f deploy/k8s/idp.yaml
+#
+# The Secret below holds placeholders only. Replace them before applying, or
+# better, create the Secret out of band and delete that section:
+#   kubectl -n idp-system create secret generic idp-backend \
+#     --from-literal=DATABASE_URL='postgres://...' \
+#     --from-literal=IDP_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: idp-system
+  labels:
+    app.kubernetes.io/name: idp
+---
+# The namespace build Jobs run in. Kept separate from application namespaces so
+# a build pod cannot read application Secrets.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: idp-builds
+  labels:
+    app.kubernetes.io/name: idp
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: idp-backend
+  namespace: idp-system
+---
+# The backend manages tenant namespaces and workloads across the cluster, so it
+# genuinely needs cluster scope. It is still enumerated verb-by-verb rather than
+# given cluster-admin: nothing here can create RBAC or escalate its own
+# permissions.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: idp-backend
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, services, configmaps, persistentvolumeclaims, events]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods, pods/log, nodes, persistentvolumes]
+    verbs: [get, list, watch]
+  # Click-to-open tunnels into a pod. This is the most powerful verb in the
+  # list — it is what the signed-ticket check on /apps/ exists to gate.
+  - apiGroups: [""]
+    resources: [pods/portforward]
+    verbs: [create]
+  # Registry pull secrets and build credentials. Scoped to the verbs the
+  # platform performs; notably absent is cluster-wide "list", so the backend
+  # cannot enumerate every Secret in the cluster.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list, watch]
+  - apiGroups: [metrics.k8s.io]
+    resources: [nodes, pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: idp-backend
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: idp-backend
+subjects:
+  - kind: ServiceAccount
+    name: idp-backend
+    namespace: idp-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: idp-backend
+  namespace: idp-system
+data:
+  SERVER_PORT: "8090"
+  APP_ENV: production
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  # In-cluster credentials come from the mounted ServiceAccount token, so no
+  # kubeconfig is needed.
+  KUBERNETES_IN_CLUSTER: "true"
+  # Must stay true outside development — the backend refuses to start
+  # otherwise, by design.
+  AUTH_ENABLED: "true"
+  AUTH_ISSUER: http://keycloak.idp-system.svc.cluster.local:8080/realms/idp
+  AUTH_AUDIENCE: idp-backend
+  AUTH_JWKS_URL: http://keycloak.idp-system.svc.cluster.local:8080/realms/idp/protocol/openid-connect/certs
+  IDP_CORS_ALLOWED_ORIGINS: https://idp.example.com
+  IDP_BUILD_ENABLED: "true"
+  IDP_BUILD_NAMESPACE: idp-builds
+  IDP_INGRESS_ENABLED: "true"
+  IDP_INGRESS_DOMAIN: apps.example.com
+  IDP_INGRESS_CLASS: nginx
+  IDP_PUBLIC_URL: https://idp.example.com
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: idp-backend
+  namespace: idp-system
+type: Opaque
+stringData:
+  # PLACEHOLDERS — replace before applying.
+  DATABASE_URL: postgres://idp:CHANGEME@postgres.idp-system.svc.cluster.local:5432/idp?sslmode=require
+  # Generate with: openssl rand -base64 32
+  # Seals registry credentials at rest and signs app-access tickets. All
+  # replicas must share it, or a ticket minted by one is rejected by another.
+  IDP_ENCRYPTION_KEY: CHANGEME-generate-a-32-byte-key
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: idp-backend
+  namespace: idp-system
+  labels:
+    app.kubernetes.io/name: idp
+    app.kubernetes.io/component: backend
+spec:
+  # Two replicas require a shared IDP_ENCRYPTION_KEY (above) so app-access
+  # tickets verify regardless of which pod serves the redemption.
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: idp
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: idp
+        app.kubernetes.io/component: backend
+    spec:
+      serviceAccountName: idp-backend
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: idp-backend:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8090
+          envFrom:
+            - configMapRef:
+                name: idp-backend
+            - secretRef:
+                name: idp-backend
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          # Liveness deliberately hits /healthz, which checks nothing but the
+          # process. /readyz checks the database — using it here would restart
+          # the pod during a database outage, which cannot help and turns a
+          # degraded platform into a CrashLoopBackOff.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Gives a slow first connection to Postgres up to 60s before the
+          # liveness probe starts counting against the pod.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              # No CPU limit on purpose: throttling a control plane during a
+              # reconcile burst causes timeouts that look like cluster faults.
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: idp-backend
+  namespace: idp-system
+spec:
+  selector:
+    app.kubernetes.io/name: idp
+    app.kubernetes.io/component: backend
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: idp-frontend
+  namespace: idp-system
+  labels:
+    app.kubernetes.io/name: idp
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: idp
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: idp
+        app.kubernetes.io/component: frontend
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: frontend
+          image: idp-frontend:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          # nginx writes its pid and scratch files at runtime; with a read-only
+          # root filesystem these have to be tmpfs mounts.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: nginx-cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: idp-frontend
+  namespace: idp-system
+spec:
+  selector:
+    app.kubernetes.io/name: idp
+    app.kubernetes.io/component: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: idp
+  namespace: idp-system
+  annotations:
+    # Log streaming holds a response open; the default 60s would sever it.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [idp.example.com]
+      secretName: idp-tls
+  rules:
+    - host: idp.example.com
+      http:
+        paths:
+          # Backend paths are matched first. The Connect RPC surface, /apps/,
+          # and the webhook must not fall through to the SPA.
+          - path: /idp.v1.
+            pathType: Prefix
+            backend:
+              service:
+                name: idp-backend
+                port:
+                  name: http
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: idp-backend
+                port:
+                  name: http
+          - path: /apps
+            pathType: Prefix
+            backend:
+              service:
+                name: idp-backend
+                port:
+                  name: http
+          - path: /webhooks
+            pathType: Prefix
+            backend:
+              service:
+                name: idp-backend
+                port:
+                  name: http
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: idp-frontend
+                port:
+                  name: http
+---
+# Keeps one replica serving during a voluntary disruption such as a node drain.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: idp-backend
+  namespace: idp-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: idp
+      app.kubernetes.io/component: backend

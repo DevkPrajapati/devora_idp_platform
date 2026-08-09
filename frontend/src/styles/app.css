@@ -1,0 +1,109 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --color-background: var(--bg);
+  --color-foreground: var(--fg);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-fg);
+  --color-border: var(--border);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-fg);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-fg);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-fg);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+}
+
+/* Brand primary is emerald, not the pure green used for healthy status.
+   Keeping them on different hues matters here: this is a Kubernetes console
+   where green already means "Running". A brand colour identical to the status
+   colour would make every button read as a health signal. Emerald sits far
+   enough toward teal to stay distinct from --success while still reading green. */
+:root {
+  --bg: #fafafa;
+  --fg: #09090b;
+  --muted: #f4f4f5;
+  --muted-fg: #71717a;
+  --border: #e4e4e7;
+  --card: #ffffff;
+  --card-fg: #09090b;
+  /* emerald-600 — white text on a primary fill clears WCAG AA. */
+  --primary: #059669;
+  --primary-fg: #ffffff;
+  --accent: #f4f4f5;
+  --accent-fg: #18181b;
+  /* Destructive stays red. It is a semantic signal, not part of the brand —
+     recolouring it would leave delete confirmations looking like success. */
+  --destructive: #dc2626;
+  --success: #16a34a;
+  --warning: #f59e0b;
+}
+
+.dark {
+  --bg: #09090b;
+  --fg: #fafafa;
+  --muted: #18181b;
+  --muted-fg: #a1a1aa;
+  --border: #27272a;
+  --card: #0f0f12;
+  --card-fg: #fafafa;
+  /* emerald-500: lighter than the light-mode primary, because a mid-tone green
+     loses contrast against a near-black background. */
+  --primary: #10b981;
+  --primary-fg: #052e16;
+  --accent: #27272a;
+  --accent-fg: #fafafa;
+  --destructive: #f87171;
+  --success: #4ade80;
+  --warning: #fbbf24;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--fg);
+  margin: 0;
+  min-height: 100vh;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-fg);
+}
+
+

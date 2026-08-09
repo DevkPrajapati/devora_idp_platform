@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package idp.v1;
+
+import "idp/v1/common.proto";
+
+option go_package = "github.com/idp/platform/backend/internal/gen/idp/v1;idpv1";
+
+service NamespaceService {
+  rpc CreateNamespace(CreateNamespaceRequest) returns (CreateNamespaceResponse);
+  rpc GetNamespace(GetNamespaceRequest) returns (GetNamespaceResponse);
+  rpc ListNamespaces(ListNamespacesRequest) returns (ListNamespacesResponse);
+  rpc DeleteNamespace(DeleteNamespaceRequest) returns (DeleteNamespaceResponse);
+  // Attaches a namespace to a project. Registry credentials, and later shared
+  // configuration, are scoped per project, so a namespace with no project has
+  // no path to them.
+  rpc SetNamespaceProject(SetNamespaceProjectRequest) returns (SetNamespaceProjectResponse);
+}
+
+message Namespace {
+  string id = 1;
+  string name = 2;
+  string display_name = 3;
+  string description = 4;
+  string owner_id = 5;
+  string owner_email = 6;
+  map<string, string> labels = 7;
+  map<string, string> annotations = 8;
+  string status = 9;
+  string created_at = 10;
+  string updated_at = 11;
+  // Slug of the owning project, empty when the namespace is unattached.
+  string project_slug = 12;
+}
+
+message CreateNamespaceRequest {
+  string name = 1;
+  string display_name = 2;
+  string description = 3;
+  map<string, string> labels = 4;
+  map<string, string> annotations = 5;
+  // Optional owning project. Required before the namespace can inherit the
+  // project's registry credentials.
+  string project_slug = 6;
+}
+
+message CreateNamespaceResponse {
+  Namespace namespace = 1;
+}
+
+message GetNamespaceRequest {
+  string name = 1;
+}
+
+message GetNamespaceResponse {
+  Namespace namespace = 1;
+}
+
+message ListNamespacesRequest {
+  PageRequest page = 1;
+  string status = 2;
+}
+
+message ListNamespacesResponse {
+  repeated Namespace namespaces = 1;
+  PageInfo page_info = 2;
+}
+
+message DeleteNamespaceRequest {
+  string name = 1;
+}
+
+message DeleteNamespaceResponse {}
+
+message SetNamespaceProjectRequest {
+  string name = 1;
+  // Empty detaches the namespace from any project.
+  string project_slug = 2;
+}
+
+message SetNamespaceProjectResponse {
+  Namespace namespace = 1;
+  // Registry Secrets written into the namespace as a result of the move.
+  repeated string synced_registry_secrets = 2;
+}

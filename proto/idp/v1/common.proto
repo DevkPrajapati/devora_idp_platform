@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package idp.v1;
+
+option go_package = "github.com/idp/platform/backend/internal/gen/idp/v1;idpv1";
+
+message PageRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+}
+
+message PageInfo {
+  int32 page = 1;
+  int32 page_size = 2;
+  int64 total_count = 3;
+  int32 total_pages = 4;
+}
+
+message KeyValue {
+  string key = 1;
+  string value = 2;
+}

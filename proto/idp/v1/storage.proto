@@ -1,0 +1,142 @@
+syntax = "proto3";
+
+package idp.v1;
+
+option go_package = "github.com/idp/platform/backend/internal/gen/idp/v1;idpv1";
+
+// StorageService exposes cluster persistence: the claims workloads make, the
+// volumes backing them, the classes that provision them, and the per-node
+// container runtime and image footprint that consumes local disk.
+//
+// Kept separate from ClusterService because storage is its own domain with its
+// own read model, not another projection of the workload overview.
+service StorageService {
+  rpc GetStorageOverview(GetStorageOverviewRequest) returns (GetStorageOverviewResponse);
+  rpc ListPersistentVolumeClaims(ListPersistentVolumeClaimsRequest) returns (ListPersistentVolumeClaimsResponse);
+  rpc ListPersistentVolumes(ListPersistentVolumesRequest) returns (ListPersistentVolumesResponse);
+  rpc ListStorageClasses(ListStorageClassesRequest) returns (ListStorageClassesResponse);
+  rpc ListNodeStorage(ListNodeStorageRequest) returns (ListNodeStorageResponse);
+}
+
+message GetStorageOverviewRequest {}
+
+message GetStorageOverviewResponse {
+  bool connected = 1;
+  int32 pvc_count = 2;
+  int32 bound_pvc_count = 3;
+  int32 pending_pvc_count = 4;
+  int32 pv_count = 5;
+  int32 available_pv_count = 6;
+  int32 storage_class_count = 7;
+  // Human-readable totals, already formatted (e.g. "120Gi"). The raw byte
+  // counts travel alongside so the UI can chart them without re-parsing
+  // Kubernetes quantity strings in the browser.
+  string total_requested = 8;
+  string total_capacity = 9;
+  int64 total_requested_bytes = 10;
+  int64 total_capacity_bytes = 11;
+}
+
+message PersistentVolumeClaimInfo {
+  string name = 1;
+  string namespace = 2;
+  // Bound, Pending or Lost.
+  string phase = 3;
+  string volume_name = 4;
+  // What the claim asked for.
+  string requested = 5;
+  // What the bound volume actually provides; empty while still Pending.
+  string capacity = 6;
+  int64 requested_bytes = 7;
+  int64 capacity_bytes = 8;
+  string storage_class = 9;
+  repeated string access_modes = 10;
+  string volume_mode = 11;
+  string created_at = 12;
+  // Pods currently mounting this claim. Empty means nothing references it,
+  // which is how an orphaned volume still costing money is spotted.
+  repeated string used_by = 13;
+}
+
+message ListPersistentVolumeClaimsRequest {
+  // Empty lists claims across every namespace.
+  string namespace = 1;
+}
+
+message ListPersistentVolumeClaimsResponse {
+  repeated PersistentVolumeClaimInfo claims = 1;
+}
+
+message PersistentVolumeInfo {
+  string name = 1;
+  // Available, Bound, Released or Failed.
+  string phase = 2;
+  string capacity = 3;
+  int64 capacity_bytes = 4;
+  string storage_class = 5;
+  repeated string access_modes = 6;
+  string reclaim_policy = 7;
+  // "namespace/name" of the bound claim, empty when unbound.
+  string claim = 8;
+  // CSI driver name, or the in-tree source kind (hostPath, nfs, local).
+  string driver = 9;
+  string created_at = 10;
+}
+
+message ListPersistentVolumesRequest {}
+
+message ListPersistentVolumesResponse {
+  repeated PersistentVolumeInfo volumes = 1;
+}
+
+message StorageClassInfo {
+  string name = 1;
+  string provisioner = 2;
+  string reclaim_policy = 3;
+  string volume_binding_mode = 4;
+  bool allow_volume_expansion = 5;
+  // Marked by the storageclass.kubernetes.io/is-default-class annotation.
+  bool is_default = 6;
+  string created_at = 7;
+}
+
+message ListStorageClassesRequest {}
+
+message ListStorageClassesResponse {
+  repeated StorageClassInfo storage_classes = 1;
+}
+
+// NodeStorageInfo carries the container-runtime and local-disk facts for one
+// node: which runtime (Docker, containerd, CRI-O) is in use, and how much of
+// the node's disk its cached images occupy.
+message NodeStorageInfo {
+  string name = 1;
+  // Prefixed URI as Kubernetes reports it, e.g. "docker://24.0.7" or
+  // "containerd://1.7.13".
+  string container_runtime = 2;
+  // The scheme half of the above, e.g. "docker".
+  string runtime_name = 3;
+  string runtime_version = 4;
+  string kubelet_version = 5;
+  string os_image = 6;
+  string kernel_version = 7;
+  string architecture = 8;
+  string operating_system = 9;
+  string ephemeral_storage_capacity = 10;
+  string ephemeral_storage_allocatable = 11;
+  int64 ephemeral_storage_capacity_bytes = 12;
+  int64 ephemeral_storage_allocatable_bytes = 13;
+  // Images the kubelet has cached locally, and their total on-disk size.
+  int32 image_count = 14;
+  int64 image_bytes = 15;
+  string image_size = 16;
+  // True when the kubelet has raised DiskPressure for this node.
+  bool disk_pressure = 17;
+  bool ready = 18;
+}
+
+message ListNodeStorageRequest {}
+
+message ListNodeStorageResponse {
+  repeated NodeStorageInfo nodes = 1;
+}

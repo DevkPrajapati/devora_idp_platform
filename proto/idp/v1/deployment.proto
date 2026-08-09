@@ -1,0 +1,299 @@
+syntax = "proto3";
+
+package idp.v1;
+
+import "idp/v1/common.proto";
+
+option go_package = "github.com/idp/platform/backend/internal/gen/idp/v1;idpv1";
+
+service DeploymentService {
+  rpc CreateDeployment(CreateDeploymentRequest) returns (CreateDeploymentResponse);
+  rpc GetDeployment(GetDeploymentRequest) returns (GetDeploymentResponse);
+  rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
+  rpc ScaleDeployment(ScaleDeploymentRequest) returns (ScaleDeploymentResponse);
+  rpc RestartDeployment(RestartDeploymentRequest) returns (RestartDeploymentResponse);
+  rpc DeleteDeployment(DeleteDeploymentRequest) returns (DeleteDeploymentResponse);
+
+  // Configuration is held in a ConfigMap and a Secret beside the Deployment,
+  // not inline in its pod spec.
+  rpc GetDeploymentConfig(GetDeploymentConfigRequest) returns (GetDeploymentConfigResponse);
+  rpc UpdateDeploymentConfig(UpdateDeploymentConfigRequest) returns (UpdateDeploymentConfigResponse);
+
+  // Rollout history is derived from the ReplicaSets Kubernetes already keeps,
+  // so the platform stores no revision data of its own.
+  rpc ListRollouts(ListRolloutsRequest) returns (ListRolloutsResponse);
+  rpc RollbackDeployment(RollbackDeploymentRequest) returns (RollbackDeploymentResponse);
+
+  // Golden paths. Templates are static server-side data, not stored per
+  // project, so every team gets the same reviewed defaults.
+  rpc ListDeploymentTemplates(ListDeploymentTemplatesRequest) returns (ListDeploymentTemplatesResponse);
+}
+
+// ResourceLimits carries Kubernetes quantity strings ("250m", "512Mi").
+// Strings rather than numbers because Kubernetes' own units are not expressible
+// as plain integers and re-deriving them invites rounding bugs.
+message ResourceLimits {
+  string cpu_request = 1;
+  string cpu_limit = 2;
+  string memory_request = 3;
+  string memory_limit = 4;
+}
+
+// DeploymentTemplate prefills the deploy form for a known stack. The developer
+// supplies image, name and version; everything else comes from here.
+message DeploymentTemplate {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  // Language or runtime family, for grouping in the UI.
+  string category = 4;
+  int32 replicas = 5;
+  int32 port = 6;
+  ResourceLimits resources = 7;
+  Probe readiness_probe = 8;
+  Probe liveness_probe = 9;
+  repeated KeyValue config_vars = 10;
+  // Secret variable names the stack usually needs, with no values. Prefilling
+  // a value would mean shipping a default credential.
+  repeated string suggested_secret_keys = 11;
+  // A real image for this stack, shown as a placeholder.
+  string example_image = 12;
+  // Why these defaults were chosen, shown next to the template.
+  string rationale = 13;
+}
+
+message ListDeploymentTemplatesRequest {}
+
+message ListDeploymentTemplatesResponse {
+  repeated DeploymentTemplate templates = 1;
+}
+
+// Probe describes an HTTP health check. An empty `path` means the probe is not
+// configured and is omitted from the pod spec entirely — Kubernetes' own
+// defaults are more dangerous than no probe when the user did not ask for one.
+message Probe {
+  string path = 1;
+  // Defaults to the container port when zero.
+  int32 port = 2;
+  int32 initial_delay_seconds = 3;
+  int32 timeout_seconds = 4;
+  int32 period_seconds = 5;
+  int32 failure_threshold = 6;
+}
+
+message Deployment {
+  string name = 1;
+  string namespace = 2;
+  string image = 3;
+  int32 replicas = 4;
+  int32 ready_replicas = 5;
+  int32 available_replicas = 6;
+  string status = 7;
+  // Non-sensitive configuration, read back from the workload's ConfigMap.
+  // Retains the original field name for wire compatibility.
+  repeated KeyValue env_vars = 8;
+  string created_at = 9;
+  // Container port the workload listens on.
+  int32 port = 10;
+  // Service type fronting the workload: ClusterIP or NodePort.
+  string service_type = 11;
+  // Allocated node port, set only when service_type is NodePort.
+  int32 node_port = 12;
+  // In-cluster DNS address, e.g. my-app.team-a.svc.cluster.local:80.
+  string cluster_address = 13;
+  // Kubernetes Service ClusterIP, e.g. 10.107.91.226 — same as kubectl get svc.
+  string cluster_ip = 24;
+  // Human-readable reason when status is not Running, e.g. ImagePullBackOff.
+  string status_reason = 14;
+  // dockerconfigjson Secrets the kubelet authenticates with. Names only —
+  // the credentials themselves are never returned.
+  repeated string image_pull_secrets = 15;
+  // ConfigMap supplying non-sensitive env vars via envFrom.
+  string config_map_name = 16;
+  // Secret supplying sensitive env vars via envFrom.
+  string secret_name = 17;
+  // Names of the sensitive variables. Values are deliberately absent: the
+  // whole point of moving them out of the pod spec is that nothing reads
+  // them back out.
+  repeated string secret_keys = 18;
+  // Browser-reachable URL served by the Ingress, empty when none exists.
+  string url = 19;
+  // Ingress hostname, e.g. backend-api.acme.idp.local.
+  string ingress_host = 20;
+  // Probes as currently configured. Absent when the workload has none.
+  Probe readiness_probe = 21;
+  Probe liveness_probe = 22;
+  // Container resources as currently set. Absent when none are configured,
+  // so the UI can say "unset" rather than showing zeros.
+  ResourceLimits resources = 23;
+}
+
+message CreateDeploymentRequest {
+  string namespace = 1;
+  string name = 2;
+  string image = 3;
+  int32 replicas = 4;
+  // Deprecated: use config_vars. Still accepted and merged into config_vars so
+  // existing clients keep working; treated as non-sensitive.
+  repeated KeyValue env_vars = 5 [deprecated = true];
+
+  map<string, string> labels = 6;
+  // Container port the image listens on. Defaults to 80 when unset.
+  int32 port = 7;
+  // ClusterIP (default) or NodePort to reach the workload from outside.
+  string service_type = 8;
+  // Non-sensitive values — NODE_ENV, LOG_LEVEL, API_URL. Stored in a ConfigMap.
+  repeated KeyValue config_vars = 9;
+  // Sensitive values — DB_PASSWORD, API_KEY, JWT_SECRET. Stored in a Secret and
+  // never returned by any read RPC.
+  repeated KeyValue secret_vars = 10;
+  // Optional health checks. Omitted from the pod spec when path is empty.
+  Probe readiness_probe = 11;
+  Probe liveness_probe = 12;
+  // Override for the generated Ingress hostname. Empty uses the platform
+  // pattern <app>.<project>.<domain>.
+  string hostname = 13;
+  // Skip Ingress creation for workloads that should stay internal.
+  bool ingress_disabled = 14;
+  // CPU and memory requests/limits. Omitted fields are left unset on the
+  // container rather than defaulted, so a workload keeps whatever the
+  // namespace LimitRange decides.
+  ResourceLimits resources = 15;
+  // Template this deployment was created from, recorded as a label for
+  // traceability. Purely informational.
+  string template_id = 16;
+  // Attach a PersistentVolumeClaim. For MongoDB / Postgres / MySQL images the
+  // platform enables this automatically unless disable_persistence is set.
+  bool persistent = 17;
+  // Skip the automatic PVC for database images (ephemeral / demo only).
+  bool disable_persistence = 18;
+  // PVC size, e.g. "5Gi". Empty uses the platform default.
+  string storage_size = 19;
+}
+
+message CreateDeploymentResponse {
+  Deployment deployment = 1;
+}
+
+message GetDeploymentRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+message GetDeploymentResponse {
+  Deployment deployment = 1;
+}
+
+message ListDeploymentsRequest {
+  string namespace = 1;
+  PageRequest page = 2;
+}
+
+message ListDeploymentsResponse {
+  repeated Deployment deployments = 1;
+  PageInfo page_info = 2;
+}
+
+message ScaleDeploymentRequest {
+  string namespace = 1;
+  string name = 2;
+  int32 replicas = 3;
+}
+
+message ScaleDeploymentResponse {
+  Deployment deployment = 1;
+}
+
+message RestartDeploymentRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+message RestartDeploymentResponse {
+  Deployment deployment = 1;
+}
+
+message DeleteDeploymentRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+message DeleteDeploymentResponse {}
+
+// Rollout is one revision of a Deployment, reconstructed from the ReplicaSet
+// that served it.
+message Rollout {
+  int64 revision = 1;
+  // When the revision was created, RFC 3339.
+  string created_at = 2;
+  string image = 3;
+  // Replicas the revision is scaled to. Superseded revisions read 0.
+  int32 replicas = 4;
+  int32 ready_replicas = 5;
+  // Active for the revision currently serving, Superseded otherwise.
+  string status = 6;
+  // kubernetes.io/change-cause annotation, when one was recorded.
+  string change_cause = 7;
+  bool current = 8;
+}
+
+message ListRolloutsRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+message ListRolloutsResponse {
+  // Newest revision first.
+  repeated Rollout rollouts = 1;
+}
+
+message RollbackDeploymentRequest {
+  string namespace = 1;
+  string name = 2;
+  // Target revision. Zero rolls back to the previous one, matching
+  // `kubectl rollout undo` with no --to-revision.
+  int64 revision = 3;
+}
+
+message RollbackDeploymentResponse {
+  Deployment deployment = 1;
+  // Revision that was rolled back to.
+  int64 revision = 2;
+}
+
+message GetDeploymentConfigRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+message GetDeploymentConfigResponse {
+  // Non-sensitive values, with values.
+  repeated KeyValue config_vars = 1;
+  // Sensitive variable names only. There is no RPC that returns their values.
+  repeated string secret_keys = 2;
+  string config_map_name = 3;
+  string secret_name = 4;
+}
+
+message UpdateDeploymentConfigRequest {
+  string namespace = 1;
+  string name = 2;
+  // Full desired set of non-sensitive variables. Anything omitted is removed —
+  // safe here because the client was shown every value.
+  repeated KeyValue config_vars = 3;
+  // Sensitive variables to add or overwrite. Untouched keys keep their existing
+  // value: the client never receives them, so it cannot resend them, and a
+  // full replace would silently wipe every secret the user did not retype.
+  repeated KeyValue secret_vars = 4;
+  // Sensitive variables to delete.
+  repeated string removed_secret_keys = 5;
+}
+
+message UpdateDeploymentConfigResponse {
+  repeated KeyValue config_vars = 1;
+  repeated string secret_keys = 2;
+  // True when the change rolled the pods. Config only reaches a running
+  // container on restart, so an update that did not roll would appear to
+  // succeed while the old values stayed live.
+  bool restarted = 3;
+}

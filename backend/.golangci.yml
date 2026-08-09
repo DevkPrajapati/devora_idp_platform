@@ -1,0 +1,87 @@
+# golangci-lint configuration.
+#
+# Lives under backend/ because that is the Go module root, and golangci-lint
+# resolves its config relative to the directory it runs in — `make lint` does
+# `cd backend && golangci-lint run ./...`.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    # Unchecked errors are the failure mode this codebase most needs guarded:
+    # a swallowed error from a Kubernetes call looks like success in the UI.
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    # Security scanner. Flags weak crypto, unsafe permissions, and command
+    # injection — all relevant to a platform that talks to a cluster and seals
+    # credentials at rest.
+    - gosec
+    - bodyclose
+    - noctx
+    - errorlint
+    - misspell
+    - unconvert
+    - wastedassign
+
+  settings:
+    gosec:
+      excludes:
+        # G104 duplicates errcheck.
+        - G104
+        # G115 flags every int64/int -> int32 narrowing. Every occurrence here
+        # is a percentage, a page count, or a slice length being fitted into a
+        # protobuf int32 field, all bounded far below 2^31 by construction.
+        # Enabling it would mean ~8 nolint comments on arithmetic that cannot
+        # overflow, which trains readers to ignore the annotation.
+        - G115
+        # G101 matches on identifiers containing "credential". The only hit is
+        # LabelCredential, a Kubernetes label *key*, not a secret.
+        - G101
+        # G304 flags os.Open on a variable path. The one caller is loadDotEnv,
+        # whose path is a compile-time constant supplied by the process itself.
+        - G304
+        # G703 flags os.Stat on the KUBECONFIG path, which is operator-supplied
+        # configuration by design — the operator already controls the process.
+        - G703
+        # G710 flags the /apps/ redirect as an open redirect. The target is
+        # built by the server as http://127.0.0.1:<port> from a port the server
+        # allocated; the namespace and name reaching it have already been
+        # signature-verified against a minted ticket.
+        - G710
+    staticcheck:
+      checks:
+        - all
+        # ST1000 requires a package comment on every package. The codebase
+        # documents at the type and function level instead; mandating package
+        # docs repo-wide is a style decision to make deliberately, not a side
+        # effect of turning the linter on.
+        - -ST1000
+        # QF1002 suggests tagged switches. A stylistic preference, and the
+        # untagged form in prober.go groups status-code ranges more readably.
+        - -QF1002
+
+  exclusions:
+    rules:
+      # Generated protobuf and sqlc output is not ours to lint.
+      - path: internal/gen/
+        linters: [staticcheck, unused, gosec, errcheck, misspell, unconvert]
+      - path: internal/database/sqlc/
+        linters: [staticcheck, unused, gosec, errcheck]
+      # Tests legitimately ignore errors on fixtures and use weak randomness.
+      - path: _test\.go
+        linters: [gosec, errcheck, noctx, bodyclose]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    paths:
+      - internal/gen
+      - internal/database/sqlc

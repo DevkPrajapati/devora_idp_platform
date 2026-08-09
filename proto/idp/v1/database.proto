@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package idp.v1;
+
+option go_package = "github.com/idp/platform/backend/internal/gen/idp/v1;idpv1";
+
+// DatabaseService discovers database workloads in the cluster and lets the
+// platform UI inspect schemas and browse rows without kubectl or a DB client.
+service DatabaseService {
+  // ListDatabases returns every MongoDB / Postgres / MySQL workload found.
+  rpc ListDatabases(ListDatabasesRequest) returns (ListDatabasesResponse);
+
+  // InspectDatabase reports collections/tables and size estimates.
+  rpc InspectDatabase(InspectDatabaseRequest) returns (InspectDatabaseResponse);
+
+  // QueryDocuments returns a capped page of documents or SQL rows as JSON.
+  rpc QueryDocuments(QueryDocumentsRequest) returns (QueryDocumentsResponse);
+
+  // ExportDatabase streams a dump archive produced inside the database pod.
+  rpc ExportDatabase(ExportDatabaseRequest) returns (ExportDatabaseResponse);
+
+  // ImportDatabase restores an archive into the database pod.
+  rpc ImportDatabase(ImportDatabaseRequest) returns (ImportDatabaseResponse);
+
+  // EnsureDatabasePersistence attaches a PVC and forces replicas=1.
+  // Export first: attaching an empty volume replaces ephemeral data on recreate.
+  rpc EnsureDatabasePersistence(EnsureDatabasePersistenceRequest) returns (EnsureDatabasePersistenceResponse);
+}
+
+message ListDatabasesRequest {
+  // Empty lists across every namespace.
+  string namespace = 1;
+}
+
+message DatabaseInstance {
+  string namespace = 1;
+  // Workload name (Deployment / StatefulSet), also the usual Service name.
+  string name = 2;
+  // mongodb | postgres | mysql
+  string engine = 3;
+  string engine_name = 4;
+  string image = 5;
+  string pod_name = 6;
+  string container = 7;
+  int32 port = 8;
+  bool ready = 9;
+  string service_name = 10;
+  repeated string persistent_volume_claims = 11;
+  // True when the platform found usable credentials on the pod. Values are
+  // never returned over the wire.
+  bool credentials_resolved = 12;
+  string credentials_hint = 13;
+}
+
+message ListDatabasesResponse {
+  repeated DatabaseInstance instances = 1;
+  bool connected = 2;
+}
+
+message InspectDatabaseRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+message DatabaseTable {
+  // Schema on SQL engines; database name on MongoDB.
+  string schema = 1;
+  string name = 2;
+  int64 row_estimate = 3;
+  int64 size_bytes = 4;
+}
+
+message InspectDatabaseResponse {
+  string engine = 1;
+  string database = 2;
+  string version = 3;
+  int32 table_count = 4;
+  int32 schema_count = 5;
+  int64 size_bytes = 6;
+  int32 active_connections = 7;
+  repeated DatabaseTable tables = 8;
+  bool tables_truncated = 9;
+  string inspected_at = 10;
+}
+
+message QueryDocumentsRequest {
+  string namespace = 1;
+  string name = 2;
+  // Schema on SQL; Mongo database name.
+  string schema = 3;
+  // Table / collection name.
+  string table = 4;
+  // Capped server-side; 0 means the platform default.
+  int32 limit = 5;
+  int32 skip = 6;
+}
+
+message QueryDocumentsResponse {
+  // Each entry is one document/row encoded as a JSON object string.
+  repeated string documents = 1;
+  int32 returned = 2;
+  int32 limit = 3;
+  int32 skip = 4;
+  bool truncated = 5;
+}
+
+message ExportDatabaseRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+message ExportDatabaseResponse {
+  bytes archive = 1;
+  string filename = 2;
+  string content_type = 3;
+  int64 size_bytes = 4;
+}
+
+message ImportDatabaseRequest {
+  string namespace = 1;
+  string name = 2;
+  bytes archive = 3;
+}
+
+message ImportDatabaseResponse {
+  string message = 1;
+  int64 size_bytes = 2;
+}
+
+message EnsureDatabasePersistenceRequest {
+  string namespace = 1;
+  string name = 2;
+  // Empty uses the platform default (5Gi).
+  string storage_size = 3;
+}
+
+message EnsureDatabasePersistenceResponse {
+  string pvc_name = 1;
+  string mount_path = 2;
+  string storage_size = 3;
+  // True when the Deployment was patched (volume mount / replicas).
+  bool patched = 4;
+  string message = 5;
+}

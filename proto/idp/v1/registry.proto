@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package idp.v1;
+
+option go_package = "github.com/idp/platform/backend/internal/gen/idp/v1;idpv1";
+
+// RegistryService manages private container-registry credentials for a
+// project. Credentials are stored encrypted and materialised as
+// kubernetes.io/dockerconfigjson Secrets in every namespace the project owns.
+service RegistryService {
+  // Creates a credential, or replaces the password/username of one with the
+  // same name. Upsert rather than separate create/update so the UI's single
+  // "Save" button maps to one call.
+  rpc SaveRegistryCredential(SaveRegistryCredentialRequest) returns (SaveRegistryCredentialResponse);
+  rpc ListRegistryCredentials(ListRegistryCredentialsRequest) returns (ListRegistryCredentialsResponse);
+  rpc DeleteRegistryCredential(DeleteRegistryCredentialRequest) returns (DeleteRegistryCredentialResponse);
+  // Authenticates against the registry without persisting anything, so the UI
+  // can validate before saving.
+  rpc TestRegistryConnection(TestRegistryConnectionRequest) returns (TestRegistryConnectionResponse);
+}
+
+// RegistryCredential is the read model. It deliberately has no password field:
+// stored passwords are never returned by any RPC.
+message RegistryCredential {
+  string project_slug = 1;
+  // Platform handle, e.g. "dockerhub". RFC 1123 label.
+  string name = 2;
+  // Registry as entered by the user, e.g. "ghcr.io".
+  string registry_url = 3;
+  // Auth key actually written into .dockerconfigjson. Differs from
+  // registry_url for Docker Hub, which uses the legacy v1 index URL.
+  string registry_host = 4;
+  string username = 5;
+  string email = 6;
+  // Name of the Kubernetes Secret rendered from this credential.
+  string secret_name = 7;
+  // Namespaces where the Secret currently exists.
+  repeated string namespaces = 8;
+  string created_at = 9;
+  string updated_at = 10;
+}
+
+message SaveRegistryCredentialRequest {
+  string project_slug = 1;
+  string name = 2;
+  string registry_url = 3;
+  string username = 4;
+  // Write-only. Never echoed back in any response.
+  string password = 5;
+  string email = 6;
+}
+
+message SaveRegistryCredentialResponse {
+  RegistryCredential credential = 1;
+  // Namespaces the Secret was written to during this call.
+  repeated string synced_namespaces = 2;
+  // Deployments whose imagePullSecrets were updated as a result.
+  int32 updated_deployments = 3;
+}
+
+message ListRegistryCredentialsRequest {
+  string project_slug = 1;
+}
+
+message ListRegistryCredentialsResponse {
+  repeated RegistryCredential credentials = 1;
+}
+
+message DeleteRegistryCredentialRequest {
+  string project_slug = 1;
+  string name = 2;
+}
+
+message DeleteRegistryCredentialResponse {}
+
+message TestRegistryConnectionRequest {
+  string project_slug = 1;
+  string registry_url = 2;
+  string username = 3;
+  // When empty and `name` refers to a saved credential, the stored password is
+  // used, so "Test" works on an existing entry without retyping it.
+  string password = 4;
+  string name = 5;
+}
+
+message TestRegistryConnectionResponse {
+  bool success = 1;
+  // Human-readable outcome, safe to display. Never contains the password.
+  string message = 2;
+  // Normalised auth key that would be written to .dockerconfigjson.
+  string registry_host = 3;
+}

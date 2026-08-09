@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+package idp.v1;
+
+option go_package = "github.com/idp/platform/backend/internal/gen/idp/v1;idpv1";
+
+// BuildService turns a git repository into a running deployment: clone, build
+// with Kaniko, push to the project's registry, optionally update a Deployment.
+//
+// Webhooks are NOT part of this service. Git providers post their own payload
+// shapes with their own headers and cannot speak Connect, so they are served by
+// a plain HTTP route at /webhooks/git/{repository_id}.
+service BuildService {
+  rpc SaveGitRepository(SaveGitRepositoryRequest) returns (SaveGitRepositoryResponse);
+  rpc ListGitRepositories(ListGitRepositoriesRequest) returns (ListGitRepositoriesResponse);
+  rpc DeleteGitRepository(DeleteGitRepositoryRequest) returns (DeleteGitRepositoryResponse);
+
+  rpc TriggerBuild(TriggerBuildRequest) returns (TriggerBuildResponse);
+  rpc RetryBuild(RetryBuildRequest) returns (RetryBuildResponse);
+  rpc ListBuilds(ListBuildsRequest) returns (ListBuildsResponse);
+}
+
+// GitRepository is the read model. It carries no token and no webhook secret:
+// both are write-only, so a compromised read path cannot hand out credentials
+// that grant push access to a source repository.
+message GitRepository {
+  string project_slug = 1;
+  string name = 2;
+  // github | gitlab | bitbucket | generic — decides webhook authentication
+  // and payload parsing.
+  string provider = 3;
+  string clone_url = 4;
+  // Only pushes to this branch trigger a webhook build.
+  string default_branch = 5;
+  string dockerfile_path = 6;
+  string build_context = 7;
+  // Where images are pushed, without a tag.
+  string image_repository = 8;
+  // registry_credentials.name used to authenticate the push.
+  string registry_credential = 9;
+  bool auto_deploy = 10;
+  string target_namespace = 11;
+  string target_deployment = 12;
+  // Whether a credential is stored, so the UI can show state without the value.
+  bool has_token = 13;
+  bool has_webhook_secret = 14;
+  // Endpoint to paste into the git provider's webhook settings.
+  string webhook_url = 15;
+  string created_at = 16;
+  string updated_at = 17;
+}
+
+// Build is one attempt. A retry creates a new Build rather than resetting an
+// old one, so the history records that a retry happened.
+message Build {
+  string repository_name = 1;
+  // Per-repository sequence, assigned by the database.
+  int64 number = 2;
+  string branch = 3;
+  string commit_sha = 4;
+  string image_tag = 5;
+  // pending | running | succeeded | failed | cancelled
+  string status = 6;
+  // manual | webhook | retry
+  string trigger_type = 7;
+  string triggered_by = 8;
+  // Kubernetes Job backing the build; also where its logs are streamed from
+  // via ClusterService.StreamPodLogs.
+  string job_name = 9;
+  string error_message = 10;
+  string started_at = 11;
+  string finished_at = 12;
+  string created_at = 13;
+}
+
+message SaveGitRepositoryRequest {
+  string project_slug = 1;
+  string name = 2;
+  string provider = 3;
+  string clone_url = 4;
+  string default_branch = 5;
+  string dockerfile_path = 6;
+  string build_context = 7;
+  string image_repository = 8;
+  string registry_credential = 9;
+  // Write-only. Empty keeps the stored value, so editing does not require
+  // retyping a secret the UI never received.
+  string token = 10;
+  string webhook_secret = 11;
+  bool auto_deploy = 12;
+  string target_namespace = 13;
+  string target_deployment = 14;
+}
+
+message SaveGitRepositoryResponse {
+  GitRepository repository = 1;
+}
+
+message ListGitRepositoriesRequest {
+  string project_slug = 1;
+}
+
+message ListGitRepositoriesResponse {
+  repeated GitRepository repositories = 1;
+}
+
+message DeleteGitRepositoryRequest {
+  string project_slug = 1;
+  string name = 2;
+}
+
+message DeleteGitRepositoryResponse {}
+
+message TriggerBuildRequest {
+  string project_slug = 1;
+  string name = 2;
+  // Empty uses the repository's default branch.
+  string branch = 3;
+}
+
+message TriggerBuildResponse {
+  Build build = 1;
+}
+
+message RetryBuildRequest {
+  string project_slug = 1;
+  string name = 2;
+  // Build to re-run. Its branch and commit are reused.
+  int64 build_number = 3;
+}
+
+message RetryBuildResponse {
+  Build build = 1;
+}
+
+message ListBuildsRequest {
+  string project_slug = 1;
+  string name = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListBuildsResponse {
+  repeated Build builds = 1;
+  int64 total_count = 2;
+  // Namespace build Jobs run in, so the client can stream their logs.
+  string build_namespace = 3;
+}

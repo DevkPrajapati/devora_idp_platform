@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+package idp.v1;
+
+option go_package = "github.com/idp/platform/backend/internal/gen/idp/v1;idpv1";
+
+service ClusterService {
+  rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse);
+  rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
+  rpc ListPods(ListPodsRequest) returns (ListPodsResponse);
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+  // Deprecated: returns a one-shot snapshot. Kept so existing callers work.
+  rpc GetPodLogs(GetPodLogsRequest) returns (GetPodLogsResponse);
+  // Streams log lines as the container writes them. The stream stays open
+  // until the client disconnects or the container exits.
+  rpc StreamPodLogs(StreamPodLogsRequest) returns (stream LogLine);
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  rpc GetResourceMetrics(GetResourceMetricsRequest) returns (GetResourceMetricsResponse);
+}
+
+message GetOverviewRequest {}
+
+message GetOverviewResponse {
+  string cluster_name = 1;
+  bool connected = 2;
+  int32 namespace_count = 3;
+  int32 deployment_count = 4;
+  int32 service_count = 5;
+  int32 pod_count = 6;
+  int32 running_pods = 7;
+  int32 node_count = 8;
+  int32 ready_nodes = 9;
+}
+
+message ClusterEvent {
+  string type = 1;
+  string reason = 2;
+  string message = 3;
+  string namespace = 4;
+  string object = 5;
+  string timestamp = 6;
+}
+
+message ListEventsRequest {
+  string namespace = 1;
+  int32 limit = 2;
+}
+
+message ListEventsResponse {
+  repeated ClusterEvent events = 1;
+}
+
+message PodInfo {
+  string name = 1;
+  string namespace = 2;
+  string status = 3;
+  string ip = 4;
+  string node = 5;
+  int32 restart_count = 6;
+  string created_at = 7;
+}
+
+message ListPodsRequest {
+  string namespace = 1;
+}
+
+message ListPodsResponse {
+  repeated PodInfo pods = 1;
+}
+
+message ServiceInfo {
+  string name = 1;
+  string namespace = 2;
+  string type = 3;
+  string cluster_ip = 4;
+  string external_ip = 5;
+  repeated int32 ports = 6;
+  string created_at = 7;
+}
+
+message ListServicesRequest {
+  string namespace = 1;
+}
+
+message ListServicesResponse {
+  repeated ServiceInfo services = 1;
+}
+
+message GetPodLogsRequest {
+  string namespace = 1;
+  string pod_name = 2;
+  int32 tail_lines = 3;
+}
+
+message GetPodLogsResponse {
+  string logs = 1;
+}
+
+message StreamPodLogsRequest {
+  string namespace = 1;
+  string pod_name = 2;
+  // Backlog to replay before following. Zero means start from now.
+  int32 tail_lines = 3;
+  // When false the stream ends once the existing logs are sent, which is how
+  // the UI fetches a snapshot without a second RPC.
+  bool follow = 4;
+  // Container to read. Empty selects the pod's first container.
+  string container = 5;
+}
+
+// LogLine is one line of container output. The pod name travels with every
+// line so a client tailing several pods can attribute them without tracking
+// which stream each line arrived on.
+message LogLine {
+  string pod_name = 1;
+  // Kubelet timestamp, RFC 3339 with nanoseconds. Empty if unparseable.
+  string timestamp = 2;
+  string message = 3;
+}
+
+message NodeInfo {
+  string name = 1;
+  string status = 2;
+  string role = 3;
+  string cpu_capacity = 4;
+  string memory_capacity = 5;
+  string cpu_allocatable = 6;
+  string memory_allocatable = 7;
+}
+
+message ListNodesRequest {}
+
+message ListNodesResponse {
+  repeated NodeInfo nodes = 1;
+}
+
+message GetResourceMetricsRequest {}
+
+message GetResourceMetricsResponse {
+  string cpu_requests = 1;
+  string cpu_capacity = 2;
+  int32 cpu_usage_percent = 3;
+  string memory_requests = 4;
+  string memory_capacity = 5;
+  int32 memory_usage_percent = 6;
+}

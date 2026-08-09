@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package idp.v1;
+
+import "idp/v1/common.proto";
+
+option go_package = "github.com/idp/platform/backend/internal/gen/idp/v1;idpv1";
+
+service AuditService {
+  rpc ListAuditLogs(ListAuditLogsRequest) returns (ListAuditLogsResponse);
+}
+
+message AuditLog {
+  string id = 1;
+  string user_id = 2;
+  string user_email = 3;
+  string action = 4;
+  string namespace = 5;
+  string resource = 6;
+  string resource_type = 7;
+  string result = 8;
+  string details = 9;
+  string created_at = 10;
+}
+
+message ListAuditLogsRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string user_id = 3;
+  string action = 4;
+}
+
+message ListAuditLogsResponse {
+  repeated AuditLog logs = 1;
+  PageInfo page_info = 2;
+}
