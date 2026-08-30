@@ -19,8 +19,9 @@ func (c *Client) EnsurePVC(
 	namespace, name, size string,
 	labels map[string]string,
 ) error {
-	if c == nil || c.Clientset == nil {
-		return fmt.Errorf("kubernetes cluster not connected")
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
 	}
 	size = strings.TrimSpace(size)
 	if size == "" {
@@ -31,7 +32,7 @@ func (c *Client) EnsurePVC(
 		return fmt.Errorf("invalid storage size %q: %w", size, err)
 	}
 
-	_, err = c.Clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metav1.GetOptions{})
+	_, err = cs.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err == nil {
 		return nil
 	}
@@ -62,7 +63,7 @@ func (c *Client) EnsurePVC(
 		},
 	}
 
-	if _, err := c.Clientset.CoreV1().PersistentVolumeClaims(namespace).Create(ctx, pvc, metav1.CreateOptions{}); err != nil {
+	if _, err := cs.CoreV1().PersistentVolumeClaims(namespace).Create(ctx, pvc, metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("create pvc: %w", err)
 	}
 	return nil
@@ -70,10 +71,11 @@ func (c *Client) EnsurePVC(
 
 // DeletePVC removes a claim. Missing claims are ignored.
 func (c *Client) DeletePVC(ctx context.Context, namespace, name string) error {
-	if c == nil || c.Clientset == nil {
-		return fmt.Errorf("kubernetes cluster not connected")
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
 	}
-	err := c.Clientset.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	err := cs.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil && !errors.IsNotFound(err) {
 		return fmt.Errorf("delete pvc: %w", err)
 	}

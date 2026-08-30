@@ -2,6 +2,10 @@ import { auth } from '$stores/auth';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? '/rpc' : 'http://localhost:8090');
 
+/** Backend origin used for /apps/ so the tab lands on *.localhost:8090, not 127.0.0.1:18xxx. */
+export const APP_ACCESS_ORIGIN =
+  import.meta.env.VITE_APP_ACCESS_ORIGIN ?? (import.meta.env.DEV ? 'http://localhost:8090' : '');
+
 export async function apiFetch(procedure: string, body: any = {}, options: RequestInit = {}): Promise<Response> {
   const headers = new Headers(options.headers || {});
   headers.set('Content-Type', 'application/json');
@@ -79,7 +83,7 @@ export async function openWorkload(
     }
 
     const { url } = (await response.json()) as { url: string };
-    const target = `${API_BASE}${url}`;
+    const target = APP_ACCESS_ORIGIN ? `${APP_ACCESS_ORIGIN}${url}` : `${API_BASE}${url}`;
 
     if (tab) {
       tab.location.replace(target);

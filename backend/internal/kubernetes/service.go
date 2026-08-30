@@ -47,6 +47,10 @@ func NormalizeServiceType(serviceType string) string {
 // Without it a Deployment has no ClusterIP, no DNS name and no node port, so
 // nothing can route traffic to its pods.
 func (c *Client) CreateWorkloadService(ctx context.Context, spec WorkloadServiceSpec) (*WorkloadServiceInfo, error) {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
 	serviceType := NormalizeServiceType(spec.ServiceType)
 
 	labels := map[string]string{
@@ -77,7 +81,7 @@ func (c *Client) CreateWorkloadService(ctx context.Context, spec WorkloadService
 		},
 	}
 
-	created, err := c.Clientset.CoreV1().Services(spec.Namespace).Create(ctx, service, metav1.CreateOptions{})
+	created, err := cs.CoreV1().Services(spec.Namespace).Create(ctx, service, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("create service: %w", err)
 	}
@@ -89,7 +93,11 @@ func (c *Client) CreateWorkloadService(ctx context.Context, spec WorkloadService
 // A missing Service is not an error: deployments created before services were
 // introduced simply have no routing information to report.
 func (c *Client) GetWorkloadService(ctx context.Context, namespace, name string) *WorkloadServiceInfo {
-	service, err := c.Clientset.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil
+	}
+	service, err := cs.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil
 	}
@@ -99,7 +107,11 @@ func (c *Client) GetWorkloadService(ctx context.Context, namespace, name string)
 // DeleteWorkloadService removes a deployment's Service, ignoring an already
 // absent one so deleting a pre-existing deployment still succeeds.
 func (c *Client) DeleteWorkloadService(ctx context.Context, namespace, name string) error {
-	err := c.Clientset.CoreV1().Services(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
+	err := cs.CoreV1().Services(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete service: %w", err)
 	}

@@ -1,10 +1,11 @@
 <script lang="ts">
+  import PageHeader from '$components/ui/PageHeader.svelte';
+  import Skeleton from '$components/ui/Skeleton.svelte';
+  import EmptyState from '$components/ui/EmptyState.svelte';
+  import DataTable from '$components/ui/DataTable.svelte';
   import Card from '$components/ui/Card.svelte';
   import CardContent from '$components/ui/CardContent.svelte';
-  import CardHeader from '$components/ui/CardHeader.svelte';
-  import CardTitle from '$components/ui/CardTitle.svelte';
-  import { listNamespaces } from '$services/namespaces';
-  import { listServices } from '$services/cluster';
+  import { listServices, listClusterNamespaces } from '$services/cluster';
   import { createQuery } from '@tanstack/svelte-query';
   import { Globe, RefreshCw } from '@lucide/svelte';
 
@@ -12,25 +13,23 @@
   let selectedNamespace = $state('');
 
   const namespacesQuery = createQuery(() => ({
-    queryKey: ['namespaces'],
-    queryFn: () => listNamespaces(1, 100),
+    queryKey: ['cluster-namespaces'],
+    queryFn: listClusterNamespaces,
+    refetchInterval: 20000,
   }));
 
   const servicesQuery = createQuery(() => ({
     queryKey: ['services', selectedNamespace || 'all'],
     queryFn: () => listServices(selectedNamespace),
-    refetchInterval: 10000,
+    refetchInterval: 15000,
   }));
 </script>
 
-<div class="space-y-6">
-  <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Services</h1>
-      <p class="mt-1 text-sm text-muted-foreground">
-        Exposed network endpoints, load balancers, and cluster routing configurations.
-      </p>
-    </div>
+<div class="page-stack">
+  <PageHeader
+    title="Services"
+    description="Exposed network endpoints, load balancers, and cluster routing configurations."
+  >
 
     <div class="flex flex-wrap items-center gap-3">
       <div class="flex items-center gap-2">
@@ -41,8 +40,8 @@
         >
           <option value="">All namespaces</option>
           {#if namespacesQuery.data}
-            {#each namespacesQuery.data.namespaces as ns}
-              <option value={ns.name}>{ns.displayName} ({ns.name})</option>
+            {#each namespacesQuery.data as ns}
+              <option value={ns.name}>{ns.name}</option>
             {/each}
           {/if}
         </select>
@@ -55,13 +54,10 @@
         <RefreshCw class="h-4 w-4" />
       </button>
     </div>
-  </div>
+  </PageHeader>
 
   {#if servicesQuery.isPending}
-    <div class="space-y-4">
-      <div class="h-12 w-full animate-pulse rounded bg-muted"></div>
-      <div class="h-20 w-full animate-pulse rounded bg-muted"></div>
-    </div>
+    <Skeleton variant="table" rows={8} />
   {:else if servicesQuery.error}
     <Card class="border-destructive bg-destructive/5">
       <CardContent class="py-6">
@@ -71,16 +67,13 @@
       </CardContent>
     </Card>
   {:else if !servicesQuery.data || servicesQuery.data.length === 0}
-    <div class="flex flex-col items-center justify-center rounded-lg border border-dashed border-border p-16 text-center">
-      <Globe class="mb-4 h-12 w-12 text-muted-foreground/40" />
-      <h3 class="text-lg font-semibold">No services found</h3>
-      <p class="mt-2 text-sm text-muted-foreground max-w-sm">
-        Expose your deployments to generate network endpoints.
-      </p>
-    </div>
+    <EmptyState
+      icon={Globe}
+      title="No services found"
+      description="Expose your deployments to generate network endpoints."
+    />
   {:else}
-    <div class="border border-border rounded-lg bg-card overflow-x-auto">
-      <table class="w-full min-w-[48rem] text-left border-collapse">
+    <DataTable minWidth="48rem">
         <thead>
           <tr class="border-b border-border bg-muted/40 text-xs font-semibold text-muted-foreground uppercase">
             <th class="px-5 py-3">Service Name</th>
@@ -119,7 +112,6 @@
             </tr>
           {/each}
         </tbody>
-      </table>
-    </div>
+    </DataTable>
   {/if}
 </div>

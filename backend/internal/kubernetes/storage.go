@@ -104,7 +104,11 @@ type StorageOverview struct {
 // claim nothing references is still consuming its volume, and that is invisible
 // from the claim object alone.
 func (c *Client) ListPersistentVolumeClaims(ctx context.Context, namespace string) ([]PersistentVolumeClaim, error) {
-	list, err := c.Clientset.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	list, err := cs.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list persistentvolumeclaims: %w", err)
 	}
@@ -112,7 +116,7 @@ func (c *Client) ListPersistentVolumeClaims(ctx context.Context, namespace strin
 	// A failure here degrades the "used by" column to empty rather than
 	// failing the whole page — the claims themselves are still worth showing.
 	mounts := map[string][]string{}
-	if pods, podErr := c.Clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{}); podErr == nil {
+	if pods, podErr := cs.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{}); podErr == nil {
 		for i := range pods.Items {
 			pod := &pods.Items[i]
 			for _, vol := range pod.Spec.Volumes {
@@ -174,7 +178,11 @@ func (c *Client) ListPersistentVolumeClaims(ctx context.Context, namespace strin
 
 // ListPersistentVolumes returns every cluster-scoped volume.
 func (c *Client) ListPersistentVolumes(ctx context.Context) ([]PersistentVolume, error) {
-	list, err := c.Clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	list, err := cs.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list persistentvolumes: %w", err)
 	}
@@ -210,7 +218,11 @@ func (c *Client) ListPersistentVolumes(ctx context.Context) ([]PersistentVolume,
 
 // ListStorageClasses returns the provisioner classes available to claims.
 func (c *Client) ListStorageClasses(ctx context.Context) ([]StorageClass, error) {
-	list, err := c.Clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	list, err := cs.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list storageclasses: %w", err)
 	}
@@ -247,7 +259,11 @@ func (c *Client) ListStorageClasses(ctx context.Context) ([]StorageClass, error)
 
 // ListNodeStorage reports each node's container runtime and image footprint.
 func (c *Client) ListNodeStorage(ctx context.Context) ([]NodeStorage, error) {
-	list, err := c.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	list, err := cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list nodes: %w", err)
 	}

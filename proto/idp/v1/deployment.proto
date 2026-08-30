@@ -39,6 +39,19 @@ message ResourceLimits {
   string memory_limit = 4;
 }
 
+// Autoscaling is a HorizontalPodAutoscaler. CPU/memory targets are average
+// utilisation percentages of the container requests. HPA will not function
+// without those requests, so the platform fills them in when autoscaling is
+// enabled and the user left them blank.
+message Autoscaling {
+  int32 min_replicas = 1;
+  int32 max_replicas = 2;
+  // Target average CPU utilisation. 0 defaults to 70 when max_replicas > 0.
+  int32 cpu_average_utilization = 3;
+  // Target average memory utilisation. 0 leaves memory out of the HPA.
+  int32 memory_average_utilization = 4;
+}
+
 // DeploymentTemplate prefills the deploy form for a known stack. The developer
 // supplies image, name and version; everything else comes from here.
 message DeploymentTemplate {
@@ -60,6 +73,7 @@ message DeploymentTemplate {
   string example_image = 12;
   // Why these defaults were chosen, shown next to the template.
   string rationale = 13;
+  Autoscaling autoscaling = 14;
 }
 
 message ListDeploymentTemplatesRequest {}
@@ -126,6 +140,8 @@ message Deployment {
   // Container resources as currently set. Absent when none are configured,
   // so the UI can say "unset" rather than showing zeros.
   ResourceLimits resources = 23;
+  // Current HPA, if one is attached.
+  Autoscaling autoscaling = 25;
 }
 
 message CreateDeploymentRequest {
@@ -169,6 +185,9 @@ message CreateDeploymentRequest {
   bool disable_persistence = 18;
   // PVC size, e.g. "5Gi". Empty uses the platform default.
   string storage_size = 19;
+  // Horizontal Pod Autoscaler. Empty or max_replicas=0 leaves replica count
+  // fixed at `replicas`.
+  Autoscaling autoscaling = 20;
 }
 
 message CreateDeploymentResponse {
@@ -198,6 +217,8 @@ message ScaleDeploymentRequest {
   string namespace = 1;
   string name = 2;
   int32 replicas = 3;
+  // When set, also creates or updates the HPA. max_replicas=0 removes it.
+  Autoscaling autoscaling = 4;
 }
 
 message ScaleDeploymentResponse {

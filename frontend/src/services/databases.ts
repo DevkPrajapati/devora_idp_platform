@@ -177,7 +177,7 @@ export async function exportDatabase(namespace: string, name: string): Promise<E
     filename: data.filename || `${name}-export.bin`,
     contentType,
     sizeBytes: toNumber(data.sizeBytes) || raw.byteLength,
-    blob: new Blob([raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)], {
+    blob: new Blob([raw.slice()], {
       type: contentType,
     }),
   };

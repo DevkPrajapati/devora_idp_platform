@@ -40,8 +40,17 @@ var procedureCatalogue = []string{
 	"/idp.v1.ClusterService/ListServices",
 	"/idp.v1.ClusterService/GetPodLogs",
 	"/idp.v1.ClusterService/StreamPodLogs",
+	"/idp.v1.ClusterService/StreamClusterLogs",
 	"/idp.v1.ClusterService/ListNodes",
 	"/idp.v1.ClusterService/GetResourceMetrics",
+	"/idp.v1.ClusterService/ListClusterNamespaces",
+	"/idp.v1.ClusterService/GetNamespaceResources",
+	"/idp.v1.ClusterService/ListClusters",
+	"/idp.v1.ClusterService/CreateCluster",
+	"/idp.v1.ClusterService/ActivateCluster",
+	"/idp.v1.ClusterService/StopCluster",
+	"/idp.v1.ClusterService/RestartCluster",
+	"/idp.v1.ClusterService/DeleteCluster",
 
 	"/idp.v1.ProjectService/CreateProject",
 	"/idp.v1.ProjectService/GetProject",
@@ -107,6 +116,7 @@ func TestMutatingProceduresAreNotReadable(t *testing.T) {
 	mutatingVerbs := []string{
 		"Create", "Update", "Delete", "Scale", "Restart",
 		"Rollback", "Save", "Add", "Remove", "Trigger", "Retry", "Set",
+		"Activate", "Stop",
 	}
 
 	for _, procedure := range procedureCatalogue {

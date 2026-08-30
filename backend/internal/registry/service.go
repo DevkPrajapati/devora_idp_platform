@@ -106,7 +106,7 @@ func (s *Service) authorizeProject(ctx context.Context, slug string, needWrite b
 }
 
 func (s *Service) requireK8s() error {
-	if s.k8s == nil {
+	if !s.k8s.Available() {
 		return connect.NewError(connect.CodeFailedPrecondition, errors.New("kubernetes cluster not connected"))
 	}
 	return nil
@@ -282,7 +282,7 @@ func (s *Service) ProjectSlugForNamespace(ctx context.Context, namespace string)
 // A namespace with no project returns no secrets and no error: public images
 // must keep deploying without any credential configured.
 func (s *Service) EnsureNamespacePullSecrets(ctx context.Context, namespace string) ([]string, error) {
-	if s.k8s == nil {
+	if !s.k8s.Available() {
 		return nil, nil
 	}
 
@@ -373,7 +373,7 @@ func (s *Service) List(ctx context.Context, req *idpv1.ListRegistryCredentialsRe
 // reason to fail a read.
 func (s *Service) secretPresence(ctx context.Context, project *db.Project) map[string][]string {
 	presence := make(map[string][]string)
-	if s.k8s == nil {
+	if !s.k8s.Available() {
 		return presence
 	}
 

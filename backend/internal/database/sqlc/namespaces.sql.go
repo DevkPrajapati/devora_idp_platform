@@ -41,10 +41,11 @@ INSERT INTO namespaces (
     labels,
     annotations,
     status,
-    project_id
+    project_id,
+    cluster_uid
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
-) RETURNING id, name, display_name, description, owner_id, owner_email, labels, annotations, status, created_at, updated_at, project_id
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+) RETURNING id, name, display_name, description, owner_id, owner_email, labels, annotations, status, created_at, updated_at, project_id, cluster_uid
 `
 
 type CreateNamespaceParams struct {
@@ -57,6 +58,7 @@ type CreateNamespaceParams struct {
 	Annotations []byte      `json:"annotations"`
 	Status      string      `json:"status"`
 	ProjectID   pgtype.UUID `json:"project_id"`
+	ClusterUid  *string     `json:"cluster_uid"`
 }
 
 func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams) (Namespace, error) {
@@ -70,6 +72,7 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 		arg.Annotations,
 		arg.Status,
 		arg.ProjectID,
+		arg.ClusterUid,
 	)
 	var i Namespace
 	err := row.Scan(
@@ -85,6 +88,7 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ProjectID,
+		&i.ClusterUid,
 	)
 	return i, err
 }
@@ -101,7 +105,7 @@ func (q *Queries) DeleteNamespace(ctx context.Context, name string) error {
 }
 
 const getNamespaceByName = `-- name: GetNamespaceByName :one
-SELECT id, name, display_name, description, owner_id, owner_email, labels, annotations, status, created_at, updated_at, project_id FROM namespaces
+SELECT id, name, display_name, description, owner_id, owner_email, labels, annotations, status, created_at, updated_at, project_id, cluster_uid FROM namespaces
 WHERE name = $1 AND status != 'deleted'
 LIMIT 1
 `
@@ -122,12 +126,13 @@ func (q *Queries) GetNamespaceByName(ctx context.Context, name string) (Namespac
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ProjectID,
+		&i.ClusterUid,
 	)
 	return i, err
 }
 
 const listNamespaces = `-- name: ListNamespaces :many
-SELECT id, name, display_name, description, owner_id, owner_email, labels, annotations, status, created_at, updated_at, project_id
+SELECT id, name, display_name, description, owner_id, owner_email, labels, annotations, status, created_at, updated_at, project_id, cluster_uid
 FROM namespaces
 WHERE status != 'deleted'
     AND ($1::text IS NULL OR status = $1)
@@ -170,6 +175,7 @@ func (q *Queries) ListNamespaces(ctx context.Context, arg ListNamespacesParams) 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ProjectID,
+			&i.ClusterUid,
 		); err != nil {
 			return nil, err
 		}
@@ -182,7 +188,7 @@ func (q *Queries) ListNamespaces(ctx context.Context, arg ListNamespacesParams) 
 }
 
 const listNamespacesByProject = `-- name: ListNamespacesByProject :many
-SELECT id, name, display_name, description, owner_id, owner_email, labels, annotations, status, created_at, updated_at, project_id FROM namespaces
+SELECT id, name, display_name, description, owner_id, owner_email, labels, annotations, status, created_at, updated_at, project_id, cluster_uid FROM namespaces
 WHERE project_id = $1 AND status != 'deleted'
 ORDER BY name ASC
 `
@@ -209,6 +215,7 @@ func (q *Queries) ListNamespacesByProject(ctx context.Context, projectID pgtype.
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ProjectID,
+			&i.ClusterUid,
 		); err != nil {
 			return nil, err
 		}
@@ -220,11 +227,125 @@ func (q *Queries) ListNamespacesByProject(ctx context.Context, projectID pgtype.
 	return items, nil
 }
 
+const orphanNamespacesFromOtherClusters = `-- name: OrphanNamespacesFromOtherClusters :many
+UPDATE namespaces
+SET status = 'deleted', updated_at = NOW()
+WHERE status != 'deleted'
+    AND cluster_uid IS NOT NULL
+    AND cluster_uid != $1
+RETURNING name
+`
+
+// Retires namespace records belonging to a cluster that no longer exists.
+//
+// Called when a reconnect proves the cluster behind a fleet row was rebuilt:
+// every namespace provisioned into the old cluster died with it.
+func (q *Queries) OrphanNamespacesFromOtherClusters(ctx context.Context, clusterUid *string) ([]string, error) {
+	rows, err := q.db.Query(ctx, orphanNamespacesFromOtherClusters, clusterUid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const retireNamespacesOfCluster = `-- name: RetireNamespacesOfCluster :many
+UPDATE namespaces
+SET status = 'deleted', updated_at = NOW()
+WHERE status != 'deleted'
+    AND cluster_uid = $1
+RETURNING name
+`
+
+// Retires every namespace that was adopted onto a specific cluster. Used when
+// that cluster is deleted, so a later recreation does not inherit its records.
+func (q *Queries) RetireNamespacesOfCluster(ctx context.Context, clusterUid *string) ([]string, error) {
+	rows, err := q.db.Query(ctx, retireNamespacesOfCluster, clusterUid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const retireUnprovenancedNamespaces = `-- name: RetireUnprovenancedNamespaces :many
+UPDATE namespaces
+SET status = 'deleted', updated_at = NOW()
+WHERE status != 'deleted'
+    AND cluster_uid IS NULL
+RETURNING name
+`
+
+// Retires namespace rows that were never fingerprinted. Safe only when the
+// caller already knows the live cluster is new (rebuild or last-cluster delete):
+// those rows cannot be proven to belong to it, and leaving them is how deleted
+// namespaces kept appearing after a recreate.
+func (q *Queries) RetireUnprovenancedNamespaces(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, retireUnprovenancedNamespaces)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setNamespaceClusterUID = `-- name: SetNamespaceClusterUID :exec
+UPDATE namespaces
+SET cluster_uid = $2, updated_at = NOW()
+WHERE name = $1 AND status != 'deleted'
+`
+
+type SetNamespaceClusterUIDParams struct {
+	Name       string  `json:"name"`
+	ClusterUid *string `json:"cluster_uid"`
+}
+
+// Backfills provenance for a namespace confirmed to exist in the live cluster.
+// Rows created before identity tracking, and rows adopted after a reconnect,
+// both land here.
+func (q *Queries) SetNamespaceClusterUID(ctx context.Context, arg SetNamespaceClusterUIDParams) error {
+	_, err := q.db.Exec(ctx, setNamespaceClusterUID, arg.Name, arg.ClusterUid)
+	return err
+}
+
 const setNamespaceProject = `-- name: SetNamespaceProject :one
 UPDATE namespaces
 SET project_id = $2, updated_at = NOW()
 WHERE name = $1 AND status != 'deleted'
-RETURNING id, name, display_name, description, owner_id, owner_email, labels, annotations, status, created_at, updated_at, project_id
+RETURNING id, name, display_name, description, owner_id, owner_email, labels, annotations, status, created_at, updated_at, project_id, cluster_uid
 `
 
 type SetNamespaceProjectParams struct {
@@ -250,6 +371,7 @@ func (q *Queries) SetNamespaceProject(ctx context.Context, arg SetNamespaceProje
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ProjectID,
+		&i.ClusterUid,
 	)
 	return i, err
 }
@@ -258,7 +380,7 @@ const updateNamespaceStatus = `-- name: UpdateNamespaceStatus :one
 UPDATE namespaces
 SET status = $2, updated_at = NOW()
 WHERE name = $1
-RETURNING id, name, display_name, description, owner_id, owner_email, labels, annotations, status, created_at, updated_at, project_id
+RETURNING id, name, display_name, description, owner_id, owner_email, labels, annotations, status, created_at, updated_at, project_id, cluster_uid
 `
 
 type UpdateNamespaceStatusParams struct {
@@ -282,6 +404,7 @@ func (q *Queries) UpdateNamespaceStatus(ctx context.Context, arg UpdateNamespace
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ProjectID,
+		&i.ClusterUid,
 	)
 	return i, err
 }

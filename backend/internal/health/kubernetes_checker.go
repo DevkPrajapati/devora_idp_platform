@@ -23,7 +23,7 @@ func (k *KubernetesChecker) Name() string {
 }
 
 func (k *KubernetesChecker) Check(ctx context.Context) (idpv1.HealthStatus, string) {
-	if k.client == nil {
+	if !k.client.Available() {
 		return idpv1.HealthStatus_HEALTH_STATUS_DEGRADED, "cluster not configured"
 	}
 	pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)

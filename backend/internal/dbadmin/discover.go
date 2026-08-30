@@ -235,8 +235,12 @@ func (d *Discoverer) Credentials(ctx context.Context, ref Ref, engine Engine) (C
 	return creds, nil
 }
 
-// envValue returns the first candidate variable that has a value, following
-// secretKeyRef and configMapKeyRef indirection.
+// envValue returns the first candidate variable that has a value.
+//
+// Kubernetes applies envFrom first, then lets individual env entries override.
+// Platform-managed workloads put MONGO_INITDB_* (and Postgres/MySQL analogues)
+// in a Secret/ConfigMap referenced by envFrom, so skipping envFrom made inspect
+// connect with no credentials while the server required auth.
 func (d *Discoverer) envValue(
 	ctx context.Context,
 	namespace string,
@@ -244,27 +248,71 @@ func (d *Discoverer) envValue(
 	candidates []string,
 ) string {
 	for _, name := range candidates {
-		for i := range container.Env {
-			env := &container.Env[i]
-			if env.Name != name {
-				continue
-			}
+		if v := d.envFromNamed(ctx, namespace, container, name); v != "" {
+			return v
+		}
+		if v := d.envFromRefs(ctx, namespace, container, name); v != "" {
+			return v
+		}
+	}
+	return ""
+}
 
-			if env.Value != "" {
-				return env.Value
+func (d *Discoverer) envFromNamed(
+	ctx context.Context,
+	namespace string,
+	container *corev1.Container,
+	name string,
+) string {
+	for i := range container.Env {
+		env := &container.Env[i]
+		if env.Name != name {
+			continue
+		}
+		if env.Value != "" {
+			return env.Value
+		}
+		if env.ValueFrom == nil {
+			continue
+		}
+		if ref := env.ValueFrom.SecretKeyRef; ref != nil {
+			if v := d.secretValue(ctx, namespace, ref.Name, ref.Key); v != "" {
+				return v
 			}
-			if env.ValueFrom == nil {
+		}
+		if ref := env.ValueFrom.ConfigMapKeyRef; ref != nil {
+			if v := d.configMapValue(ctx, namespace, ref.Name, ref.Key); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+func (d *Discoverer) envFromRefs(
+	ctx context.Context,
+	namespace string,
+	container *corev1.Container,
+	name string,
+) string {
+	// Later envFrom sources override earlier ones for the same key.
+	for i := len(container.EnvFrom) - 1; i >= 0; i-- {
+		src := container.EnvFrom[i]
+		key := name
+		if src.Prefix != "" {
+			if !strings.HasPrefix(name, src.Prefix) {
 				continue
 			}
-			if ref := env.ValueFrom.SecretKeyRef; ref != nil {
-				if v := d.secretValue(ctx, namespace, ref.Name, ref.Key); v != "" {
-					return v
-				}
+			key = strings.TrimPrefix(name, src.Prefix)
+		}
+		if src.SecretRef != nil {
+			if v := d.secretValue(ctx, namespace, src.SecretRef.Name, key); v != "" {
+				return v
 			}
-			if ref := env.ValueFrom.ConfigMapKeyRef; ref != nil {
-				if v := d.configMapValue(ctx, namespace, ref.Name, ref.Key); v != "" {
-					return v
-				}
+		}
+		if src.ConfigMapRef != nil {
+			if v := d.configMapValue(ctx, namespace, src.ConfigMapRef.Name, key); v != "" {
+				return v
 			}
 		}
 	}

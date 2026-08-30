@@ -110,6 +110,10 @@ func (c *Client) EnsureWorkloadConfig(ctx context.Context, namespace, app string
 }
 
 func (c *Client) ensureConfigMap(ctx context.Context, namespace, app string, data map[string]string) error {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
 	name := WorkloadConfigMapName(app)
 	if data == nil {
 		data = map[string]string{}
@@ -124,7 +128,7 @@ func (c *Client) ensureConfigMap(ctx context.Context, namespace, app string, dat
 		Data: data,
 	}
 
-	api := c.Clientset.CoreV1().ConfigMaps(namespace)
+	api := cs.CoreV1().ConfigMaps(namespace)
 	_, err := api.Create(ctx, desired, metav1.CreateOptions{})
 	if err == nil {
 		return nil
@@ -150,6 +154,10 @@ func (c *Client) ensureConfigMap(ctx context.Context, namespace, app string, dat
 }
 
 func (c *Client) ensureSecret(ctx context.Context, namespace, app string, data map[string]string) error {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
 	name := WorkloadSecretName(app)
 	if data == nil {
 		data = map[string]string{}
@@ -165,7 +173,7 @@ func (c *Client) ensureSecret(ctx context.Context, namespace, app string, data m
 		StringData: data,
 	}
 
-	api := c.Clientset.CoreV1().Secrets(namespace)
+	api := cs.CoreV1().Secrets(namespace)
 	_, err := api.Create(ctx, desired, metav1.CreateOptions{})
 	if err == nil {
 		return nil
@@ -200,8 +208,12 @@ func (c *Client) ensureSecret(ctx context.Context, namespace, app string, data m
 // existing values, so it cannot echo them back — it would wipe every secret the
 // user did not retype.
 func (c *Client) MergeWorkloadSecret(ctx context.Context, namespace, app string, set map[string]string, remove []string) (map[string]string, error) {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
 	name := WorkloadSecretName(app)
-	api := c.Clientset.CoreV1().Secrets(namespace)
+	api := cs.CoreV1().Secrets(namespace)
 
 	var merged map[string]string
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -245,10 +257,14 @@ func (c *Client) MergeWorkloadSecret(ctx context.Context, namespace, app string,
 // GetWorkloadConfig returns the non-sensitive values and the sensitive key
 // names. Secret values are never part of the result.
 func (c *Client) GetWorkloadConfig(ctx context.Context, namespace, app string) (configVars map[string]string, secretKeys []string, err error) {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, nil, csErr
+	}
 	configVars = make(map[string]string)
 	secretKeys = []string{}
 
-	cm, cmErr := c.Clientset.CoreV1().ConfigMaps(namespace).Get(ctx, WorkloadConfigMapName(app), metav1.GetOptions{})
+	cm, cmErr := cs.CoreV1().ConfigMaps(namespace).Get(ctx, WorkloadConfigMapName(app), metav1.GetOptions{})
 	if cmErr != nil && !apierrors.IsNotFound(cmErr) {
 		return nil, nil, fmt.Errorf("get configmap: %w", cmErr)
 	}
@@ -258,7 +274,7 @@ func (c *Client) GetWorkloadConfig(ctx context.Context, namespace, app string) (
 		}
 	}
 
-	secret, secretErr := c.Clientset.CoreV1().Secrets(namespace).Get(ctx, WorkloadSecretName(app), metav1.GetOptions{})
+	secret, secretErr := cs.CoreV1().Secrets(namespace).Get(ctx, WorkloadSecretName(app), metav1.GetOptions{})
 	if secretErr != nil && !apierrors.IsNotFound(secretErr) {
 		return nil, nil, fmt.Errorf("get secret: %w", secretErr)
 	}
@@ -275,7 +291,11 @@ func (c *Client) GetWorkloadConfig(ctx context.Context, namespace, app string) (
 // readSecretValues returns the current secret values for checksum computation
 // only. Unexported so nothing outside this package can reach the values.
 func (c *Client) readSecretValues(ctx context.Context, namespace, app string) map[string]string {
-	secret, err := c.Clientset.CoreV1().Secrets(namespace).Get(ctx, WorkloadSecretName(app), metav1.GetOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil
+	}
+	secret, err := cs.CoreV1().Secrets(namespace).Get(ctx, WorkloadSecretName(app), metav1.GetOptions{})
 	if err != nil {
 		return map[string]string{}
 	}
@@ -289,13 +309,17 @@ func (c *Client) readSecretValues(ctx context.Context, namespace, app string) ma
 // DeleteWorkloadConfig removes both configuration objects. Absent objects are
 // not an error, so deleting a deployment created before this feature works.
 func (c *Client) DeleteWorkloadConfig(ctx context.Context, namespace, app string) error {
-	cmErr := c.Clientset.CoreV1().ConfigMaps(namespace).
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
+	cmErr := cs.CoreV1().ConfigMaps(namespace).
 		Delete(ctx, WorkloadConfigMapName(app), metav1.DeleteOptions{})
 	if cmErr != nil && !apierrors.IsNotFound(cmErr) {
 		return fmt.Errorf("delete configmap: %w", cmErr)
 	}
 
-	secretErr := c.Clientset.CoreV1().Secrets(namespace).
+	secretErr := cs.CoreV1().Secrets(namespace).
 		Delete(ctx, WorkloadSecretName(app), metav1.DeleteOptions{})
 	if secretErr != nil && !apierrors.IsNotFound(secretErr) {
 		return fmt.Errorf("delete secret: %w", secretErr)
@@ -306,9 +330,13 @@ func (c *Client) DeleteWorkloadConfig(ctx context.Context, namespace, app string
 // ApplyConfigChecksum stamps the pod template so a configuration change rolls
 // the deployment, and reports whether anything actually changed.
 func (c *Client) ApplyConfigChecksum(ctx context.Context, namespace, app string, configVars map[string]string) (bool, error) {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return false, csErr
+	}
 	checksum := ConfigChecksum(configVars, c.readSecretValues(ctx, namespace, app))
 
-	api := c.Clientset.AppsV1().Deployments(namespace)
+	api := cs.AppsV1().Deployments(namespace)
 	changed := false
 
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {

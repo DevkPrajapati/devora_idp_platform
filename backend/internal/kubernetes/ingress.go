@@ -133,6 +133,10 @@ func ValidateHostname(raw string) (string, error) {
 
 // EnsureIngress creates or updates the Ingress for a workload.
 func (c *Client) EnsureIngress(ctx context.Context, cfg IngressConfig, spec IngressSpec) error {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
 	cfg = cfg.Normalize()
 
 	labels := map[string]string{
@@ -183,7 +187,7 @@ func (c *Client) EnsureIngress(ctx context.Context, cfg IngressConfig, spec Ingr
 		}
 	}
 
-	api := c.Clientset.NetworkingV1().Ingresses(spec.Namespace)
+	api := cs.NetworkingV1().Ingresses(spec.Namespace)
 	_, err := api.Create(ctx, desired, metav1.CreateOptions{})
 	if err == nil {
 		return nil
@@ -212,7 +216,11 @@ func (c *Client) EnsureIngress(ctx context.Context, cfg IngressConfig, spec Ingr
 // none. A missing Ingress is not an error: workloads created before this
 // feature, and those deployed with ingress disabled, simply have no URL.
 func (c *Client) GetIngressHost(ctx context.Context, namespace, name string) string {
-	ing, err := c.Clientset.NetworkingV1().Ingresses(namespace).Get(ctx, name, metav1.GetOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return ""
+	}
+	ing, err := cs.NetworkingV1().Ingresses(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil || len(ing.Spec.Rules) == 0 {
 		return ""
 	}
@@ -221,7 +229,11 @@ func (c *Client) GetIngressHost(ctx context.Context, namespace, name string) str
 
 // DeleteIngress removes a workload's Ingress, ignoring an absent one.
 func (c *Client) DeleteIngress(ctx context.Context, namespace, name string) error {
-	err := c.Clientset.NetworkingV1().Ingresses(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
+	err := cs.NetworkingV1().Ingresses(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete ingress %s/%s: %w", namespace, name, err)
 	}

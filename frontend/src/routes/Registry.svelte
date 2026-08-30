@@ -12,7 +12,11 @@
     type RegistryCredential,
   } from '$services/registry';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
-  import { KeyRound, Plus, Trash2, X, RefreshCw, AlertCircle, CheckCircle2, ShieldCheck } from '@lucide/svelte';
+  import { KeyRound, Plus, Trash2, RefreshCw, AlertCircle, CheckCircle2, ShieldCheck } from '@lucide/svelte';
+  import Modal from '$components/ui/Modal.svelte';
+  import PageHeader from '$components/ui/PageHeader.svelte';
+  import Skeleton from '$components/ui/Skeleton.svelte';
+  import EmptyState from '$components/ui/EmptyState.svelte';
 
   const queryClient = useQueryClient();
 
@@ -174,15 +178,11 @@
   }
 </script>
 
-<div class="space-y-6">
-  <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Registry Credentials</h1>
-      <p class="mt-1 text-sm text-muted-foreground">
-        Authenticate against private registries. Credentials are encrypted at rest and published as
-        <span class="font-mono text-xs">dockerconfigjson</span> Secrets in every namespace the project owns.
-      </p>
-    </div>
+<div class="page-stack">
+  <PageHeader
+    title="Registry Credentials"
+    description="Authenticate against private registries. Credentials are encrypted at rest and published as dockerconfigjson Secrets in every namespace the project owns."
+  >
 
     <div class="flex flex-wrap items-center gap-3">
       <div class="flex items-center gap-2">
@@ -221,7 +221,7 @@
         </button>
       {/if}
     </div>
-  </div>
+  </PageHeader>
 
   {#if noticeMsg}
     <Card class="border-amber-500/40 bg-amber-500/5">
@@ -232,18 +232,13 @@
   {/if}
 
   {#if !selectedProject}
-    <div class="flex flex-col items-center justify-center rounded-lg border border-dashed border-border p-16 text-center">
-      <AlertCircle class="mb-4 h-12 w-12 text-muted-foreground/40" />
-      <h3 class="text-lg font-semibold">Select a project</h3>
-      <p class="mt-2 text-sm text-muted-foreground max-w-sm">
-        Registry credentials are scoped to a project and inherited by every namespace it owns.
-      </p>
-    </div>
+    <EmptyState
+      icon={AlertCircle}
+      title="Select a project"
+      description="Registry credentials are scoped to a project and inherited by every namespace it owns."
+    />
   {:else if credentialsQuery.isPending}
-    <div class="space-y-4">
-      <div class="h-12 w-full animate-pulse rounded bg-muted"></div>
-      <div class="h-20 w-full animate-pulse rounded bg-muted"></div>
-    </div>
+    <Skeleton variant="table" rows={4} />
   {:else if credentialsQuery.error}
     <Card class="border-destructive bg-destructive/5">
       <CardContent class="py-6">
@@ -251,22 +246,20 @@
       </CardContent>
     </Card>
   {:else if !credentialsQuery.data || credentialsQuery.data.length === 0}
-    <div class="flex flex-col items-center justify-center rounded-lg border border-dashed border-border p-16 text-center">
-      <KeyRound class="mb-4 h-12 w-12 text-muted-foreground/40" />
-      <h3 class="text-lg font-semibold">No registry credentials</h3>
-      <p class="mt-2 text-sm text-muted-foreground max-w-md">
-        Deployments in this project can only pull public images. Add a credential to deploy from Docker Hub,
-        GHCR, GitLab, ECR, ACR or GCR.
-      </p>
+    <EmptyState
+      icon={KeyRound}
+      title="No registry credentials"
+      description="Deployments in this project can only pull public images. Add a credential to deploy from Docker Hub, GHCR, GitLab, ECR, ACR or GCR."
+    >
       {#if canWrite}
         <button
           onclick={openCreate}
-          class="mt-4 inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          class="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
         >
           Add Credential
         </button>
       {/if}
-    </div>
+    </EmptyState>
   {:else}
     <div class="border border-border rounded-lg bg-card overflow-x-auto">
       <table class="w-full min-w-[52rem] text-left border-collapse">
@@ -336,203 +329,194 @@
 </div>
 
 <!-- Add / Edit Credential Modal -->
-{#if showModal && canWrite}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-    <div class="w-full max-w-xl rounded-xl border border-border bg-card p-6 shadow-lg max-h-[90vh] overflow-y-auto">
-      <div class="flex items-center justify-between border-b border-border pb-3">
-        <h2 class="text-lg font-semibold">
-          {editingExisting ? `Edit credential — ${credName}` : 'Add Registry Credential'}
-        </h2>
-        <button
-          onclick={() => (showModal = false)}
-          aria-label="Close"
-          class="rounded-md p-1 hover:bg-accent text-muted-foreground"
-        >
-          <X class="h-5 w-5" />
-        </button>
-      </div>
+<Modal
+  open={showModal && canWrite}
+  title={editingExisting ? `Edit credential — ${credName}` : 'Add Registry Credential'}
+  size="lg"
+  onclose={() => (showModal = false)}
+>
+  <form id="registry-credential-form" onsubmit={handleSave} class="space-y-4">
+    {#if errorMsg}
+      <p class="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{errorMsg}</p>
+    {/if}
 
-      <form onsubmit={handleSave} class="mt-4 space-y-4">
-        {#if errorMsg}
-          <p class="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{errorMsg}</p>
+    {#if testResult}
+      <p
+        class="flex items-start gap-2 rounded-md p-3 text-sm {testResult.success
+          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+          : 'bg-destructive/10 text-destructive'}"
+      >
+        {#if testResult.success}
+          <CheckCircle2 class="mt-0.5 h-4 w-4 shrink-0" />
+        {:else}
+          <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" />
         {/if}
+        <span>{testResult.message}</span>
+      </p>
+    {/if}
 
-        {#if testResult}
-          <p
-            class="flex items-start gap-2 rounded-md p-3 text-sm {testResult.success
-              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-              : 'bg-destructive/10 text-destructive'}"
-          >
-            {#if testResult.success}
-              <CheckCircle2 class="mt-0.5 h-4 w-4 shrink-0" />
-            {:else}
-              <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" />
-            {/if}
-            <span>{testResult.message}</span>
-          </p>
-        {/if}
-
-        <div class="space-y-1.5">
-          <span class="text-sm font-medium">Registry</span>
-          <div class="flex flex-wrap gap-1.5">
-            {#each REGISTRY_PRESETS as preset}
-              <button
-                type="button"
-                onclick={() => applyPreset(preset.url)}
-                class="rounded-full border border-input px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              >
-                {preset.label}
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div class="space-y-1.5">
-            <label for="credName" class="text-sm font-medium">Credential Name</label>
-            <input
-              id="credName"
-              type="text"
-              required
-              readonly={editingExisting}
-              pattern="[a-z0-9]([-a-z0-9]*[a-z0-9])?"
-              maxlength="48"
-              placeholder="e.g. dockerhub"
-              bind:value={credName}
-              class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring read-only:opacity-60"
-            />
-            <p class="text-xs text-muted-foreground">
-              Becomes Secret <span class="font-mono">idp-registry-{credName || 'name'}</span>
-            </p>
-          </div>
-          <div class="space-y-1.5">
-            <label for="registryUrl" class="text-sm font-medium">Registry URL</label>
-            <input
-              id="registryUrl"
-              type="text"
-              required
-              placeholder="ghcr.io"
-              bind:value={registryUrl}
-              oninput={() => (testResult = null)}
-              class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            />
-            <p class="text-xs text-muted-foreground">Host or host:port. Scheme optional.</p>
-          </div>
-        </div>
-
-        {#if selectedPreset}
-          <p class="rounded-md bg-muted/50 p-2.5 text-xs text-muted-foreground">{selectedPreset.hint}</p>
-        {/if}
-
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div class="space-y-1.5">
-            <label for="username" class="text-sm font-medium">Username</label>
-            <input
-              id="username"
-              type="text"
-              required
-              autocomplete="off"
-              bind:value={username}
-              oninput={() => (testResult = null)}
-              class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            />
-          </div>
-          <div class="space-y-1.5">
-            <label for="password" class="text-sm font-medium">
-              Password / Access Token
-              {#if editingExisting}
-                <span class="font-normal text-muted-foreground">(blank keeps current)</span>
-              {/if}
-            </label>
-            <input
-              id="password"
-              type="password"
-              required={!editingExisting}
-              autocomplete="new-password"
-              bind:value={password}
-              oninput={() => (testResult = null)}
-              class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            />
-          </div>
-        </div>
-
-        <div class="space-y-1.5">
-          <label for="email" class="text-sm font-medium">
-            Email <span class="font-normal text-muted-foreground">(optional)</span>
-          </label>
-          <input
-            id="email"
-            type="email"
-            bind:value={email}
-            class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </div>
-
-        <div class="flex flex-wrap justify-between gap-3 pt-3 border-t border-border">
+    <div class="space-y-1.5">
+      <span class="text-sm font-medium">Registry</span>
+      <div class="flex flex-wrap gap-1.5">
+        {#each REGISTRY_PRESETS as preset}
           <button
             type="button"
-            onclick={handleTest}
-            disabled={isTesting || !registryUrl || !username}
-            class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent disabled:opacity-50"
+            onclick={() => applyPreset(preset.url)}
+            class="rounded-full border border-input px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground"
           >
-            {isTesting ? 'Testing...' : 'Test Connection'}
+            {preset.label}
           </button>
-
-          <div class="flex gap-3">
-            <button
-              type="button"
-              onclick={() => (showModal = false)}
-              class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              class="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            >
-              {isSubmitting ? 'Saving...' : 'Save'}
-            </button>
-          </div>
-        </div>
-      </form>
+        {/each}
+      </div>
     </div>
-  </div>
-{/if}
 
-<!-- Delete Confirmation -->
-{#if showDeleteModal && canWrite}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-    <div class="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-lg">
-      <h2 class="text-lg font-semibold">Delete registry credential</h2>
-      <p class="mt-2 text-sm text-muted-foreground">
-        Removing <span class="font-mono font-semibold text-rose-500">{credentialToDelete}</span> deletes its
-        Secret from every namespace in this project and drops it from every deployment's
-        <span class="font-mono">imagePullSecrets</span>. Running pods keep running, but the next image pull
-        will fail if the image is private.
-      </p>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div class="space-y-1.5">
+        <label for="credName" class="text-sm font-medium">Credential Name</label>
+        <input
+          id="credName"
+          type="text"
+          required
+          readonly={editingExisting}
+          pattern="[a-z0-9]([-a-z0-9]*[a-z0-9])?"
+          maxlength="48"
+          placeholder="e.g. dockerhub"
+          bind:value={credName}
+          class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring read-only:opacity-60"
+        />
+        <p class="text-xs text-muted-foreground">
+          Becomes Secret <span class="font-mono">idp-registry-{credName || 'name'}</span>
+        </p>
+      </div>
+      <div class="space-y-1.5">
+        <label for="registryUrl" class="text-sm font-medium">Registry URL</label>
+        <input
+          id="registryUrl"
+          type="text"
+          required
+          placeholder="ghcr.io"
+          bind:value={registryUrl}
+          oninput={() => (testResult = null)}
+          class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+        <p class="text-xs text-muted-foreground">Host or host:port. Scheme optional.</p>
+      </div>
+    </div>
 
-      {#if errorMsg}
-        <p class="mt-3 text-sm text-destructive bg-destructive/10 p-3 rounded-md">{errorMsg}</p>
-      {/if}
+    {#if selectedPreset}
+      <p class="rounded-md bg-muted/50 p-2.5 text-xs text-muted-foreground">{selectedPreset.hint}</p>
+    {/if}
 
-      <div class="mt-6 flex justify-end gap-3">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div class="space-y-1.5">
+        <label for="username" class="text-sm font-medium">Username</label>
+        <input
+          id="username"
+          type="text"
+          required
+          autocomplete="off"
+          bind:value={username}
+          oninput={() => (testResult = null)}
+          class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+      <div class="space-y-1.5">
+        <label for="password" class="text-sm font-medium">
+          Password / Access Token
+          {#if editingExisting}
+            <span class="font-normal text-muted-foreground">(blank keeps current)</span>
+          {/if}
+        </label>
+        <input
+          id="password"
+          type="password"
+          required={!editingExisting}
+          autocomplete="new-password"
+          bind:value={password}
+          oninput={() => (testResult = null)}
+          class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+    </div>
+
+    <div class="space-y-1.5">
+      <label for="email" class="text-sm font-medium">
+        Email <span class="font-normal text-muted-foreground">(optional)</span>
+      </label>
+      <input
+        id="email"
+        type="email"
+        bind:value={email}
+        class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+      />
+    </div>
+
+  </form>
+
+  {#snippet footer()}
+    <div class="flex w-full flex-wrap items-center justify-between gap-3">
+      <button
+        type="button"
+        onclick={handleTest}
+        disabled={isTesting || !registryUrl || !username}
+        class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent disabled:opacity-50"
+      >
+        {isTesting ? 'Testing...' : 'Test Connection'}
+      </button>
+
+      <div class="flex gap-3">
         <button
           type="button"
-          onclick={() => { showDeleteModal = false; credentialToDelete = ''; }}
+          onclick={() => (showModal = false)}
           class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent"
         >
           Cancel
         </button>
         <button
-          type="button"
+          type="submit"
+          form="registry-credential-form"
           disabled={isSubmitting}
-          onclick={handleDelete}
-          class="inline-flex h-9 items-center justify-center rounded-md bg-destructive px-4 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+          class="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         >
-          {isSubmitting ? 'Deleting...' : 'Delete Credential'}
+          {isSubmitting ? 'Saving...' : 'Save'}
         </button>
       </div>
     </div>
-  </div>
-{/if}
+  {/snippet}
+</Modal>
+
+<!-- Delete Confirmation -->
+<Modal
+  open={showDeleteModal && canWrite}
+  title="Delete registry credential"
+  onclose={() => { showDeleteModal = false; credentialToDelete = ''; }}
+>
+  <p class="text-sm text-muted-foreground">
+    Removing <span class="font-mono font-semibold text-rose-500">{credentialToDelete}</span> deletes its
+    Secret from every namespace in this project and drops it from every deployment's
+    <span class="font-mono">imagePullSecrets</span>. Running pods keep running, but the next image pull
+    will fail if the image is private.
+  </p>
+
+  {#if errorMsg}
+    <p class="mt-3 text-sm text-destructive bg-destructive/10 p-3 rounded-md">{errorMsg}</p>
+  {/if}
+
+  {#snippet footer()}
+    <button
+      type="button"
+      onclick={() => { showDeleteModal = false; credentialToDelete = ''; }}
+      class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent"
+    >
+      Cancel
+    </button>
+    <button
+      type="button"
+      disabled={isSubmitting}
+      onclick={handleDelete}
+      class="inline-flex h-9 items-center justify-center rounded-md bg-destructive px-4 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+    >
+      {isSubmitting ? 'Deleting...' : 'Delete Credential'}
+    </button>
+  {/snippet}
+</Modal>

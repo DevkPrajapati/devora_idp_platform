@@ -18,9 +18,11 @@
     listDeploymentTemplates,
     emptyProbe,
     emptyResources,
+    emptyAutoscaling,
     probeOrUndefined,
     type Rollout,
     type ResourceLimits,
+    type Autoscaling,
     type DeploymentTemplate,
     type Deployment,
     type EnvVar,
@@ -28,9 +30,17 @@
     type Probe
   } from '$services/deployments';
   import { openWorkload } from '$services/client';
+  import { activityLog } from '$stores/activitylog';
   import { isDatabaseImage } from '$services/databases';
   import { router } from '$stores/router';
   import { createQuery, useQueryClient } from '@tanstack/svelte-query';
+  import Modal from '$components/ui/Modal.svelte';
+  import DeploymentLogPanel from '$components/DeploymentLogPanel.svelte';
+  import PageHeader from '$components/ui/PageHeader.svelte';
+  import Skeleton from '$components/ui/Skeleton.svelte';
+  import EmptyState from '$components/ui/EmptyState.svelte';
+  import DataTable from '$components/ui/DataTable.svelte';
+  import { statusBadgeClass } from '$lib/status';
   import { Container, Plus, Trash2, X, RefreshCw, Scale, Play, AlertCircle, Settings2, KeyRound, ExternalLink, HeartPulse, History, Undo2, Layers, Cylinder, Terminal } from '@lucide/svelte';
 
   const queryClient = useQueryClient();
@@ -47,9 +57,11 @@
     openingApp = `${namespace}/${name}`;
     openAppError = '';
     try {
+      activityLog.push(`deploy:${namespace}/${name}`, 'info', `Opening ${namespace}/${name} on localhost…`);
       await openWorkload(namespace, name);
     } catch (err) {
       openAppError = err instanceof Error ? err.message : 'Could not open this app.';
+      activityLog.push(`deploy:${namespace}/${name}`, 'error', openAppError);
     } finally {
       openingApp = '';
     }
@@ -76,7 +88,7 @@
     queryKey: ['deployments', selectedNamespace],
     queryFn: () => listDeployments(selectedNamespace),
     enabled: !!selectedNamespace,
-    refetchInterval: 10000,
+    refetchInterval: 12000,
   }));
 
   // Reactive role state from the auth store
@@ -105,6 +117,7 @@
   let livenessProbe = $state<Probe>(emptyProbe());
   let showAdvanced = $state(false);
   let appResources = $state<ResourceLimits>(emptyResources());
+  let appAutoscaling = $state<Autoscaling>(emptyAutoscaling());
   let selectedTemplateId = $state('');
 
   const templatesQuery = createQuery(() => ({
@@ -128,6 +141,7 @@
     appReplicas = tpl.replicas;
     appPort = tpl.port;
     appResources = { ...tpl.resources };
+    appAutoscaling = tpl.autoscaling ? { ...tpl.autoscaling } : emptyAutoscaling();
     readinessProbe = tpl.readinessProbe ? { ...tpl.readinessProbe } : emptyProbe();
     livenessProbe = tpl.livenessProbe ? { ...tpl.livenessProbe } : emptyProbe();
     configVars = tpl.configVars.length > 0
@@ -140,6 +154,7 @@
     if (tpl.category === 'Database') {
       appIngressDisabled = true;
       appReplicas = 1;
+      appAutoscaling = emptyAutoscaling();
       if (tpl.exampleImage && !appImage.trim()) {
         appImage = tpl.exampleImage;
       }
@@ -152,6 +167,7 @@
   function clearTemplate() {
     selectedTemplateId = '';
     appResources = emptyResources();
+    appAutoscaling = emptyAutoscaling();
     readinessProbe = emptyProbe();
     livenessProbe = emptyProbe();
     configVars = [{ key: '', value: '' }];
@@ -178,9 +194,17 @@
   // Scale state
   let activeDeployment = $state<Deployment | null>(null);
   let targetReplicas = $state(1);
+  let scaleAutoscaling = $state<Autoscaling>(emptyAutoscaling());
 
   // Delete state
   let deploymentToDelete = $state('');
+
+  // Live logs — opened automatically after deploy, or from View logs.
+  let logTarget = $state<{ namespace: string; name: string } | null>(null);
+
+  function openLogs(namespace: string, name: string) {
+    logTarget = { namespace, name };
+  }
 
   function resetForm() {
     appName = '';
@@ -196,6 +220,7 @@
     livenessProbe = emptyProbe();
     showAdvanced = false;
     appResources = emptyResources();
+    appAutoscaling = emptyAutoscaling();
     selectedTemplateId = '';
     errorMsg = '';
   }
@@ -319,6 +344,10 @@
     isSubmitting = true;
     errorMsg = '';
 
+    const deployedNs = selectedNamespace;
+    const deployedName = appName;
+    openLogs(deployedNs, deployedName);
+    activityLog.push(`deploy:${deployedNs}/${deployedName}`, 'info', `CreateDeployment API → ${appImage} (${appReplicas} replica${appReplicas === 1 ? '' : 's'})`);
     try {
       await createDeployment({
         namespace: selectedNamespace,
@@ -340,13 +369,16 @@
         // Database images get a 5Gi PVC automatically unless the operator opts out.
         persistent: isDatabaseImage(appImage),
         storageSize: isDatabaseImage(appImage) ? '5Gi' : '',
+        autoscaling: appAutoscaling.maxReplicas > 1 ? appAutoscaling : null,
       });
       queryClient.invalidateQueries({ queryKey: ['deployments', selectedNamespace] });
       queryClient.invalidateQueries({ queryKey: ['cluster-overview'] });
+      activityLog.push(`deploy:${deployedNs}/${deployedName}`, 'success', 'API accepted. Waiting for pods / image pull.');
       showCreateModal = false;
       resetForm();
     } catch (err: any) {
       errorMsg = err.message || 'Failed to create deployment';
+      activityLog.push(`deploy:${deployedNs}/${deployedName}`, 'error', errorMsg);
     } finally {
       isSubmitting = false;
     }
@@ -359,7 +391,12 @@
     errorMsg = '';
 
     try {
-      await scaleDeployment(selectedNamespace, activeDeployment.name, targetReplicas);
+      await scaleDeployment(
+        selectedNamespace,
+        activeDeployment.name,
+        targetReplicas,
+        scaleAutoscaling.maxReplicas > 1 ? scaleAutoscaling : { minReplicas: 1, maxReplicas: 0, cpuAverageUtilization: 0, memoryAverageUtilization: 0 },
+      );
       queryClient.invalidateQueries({ queryKey: ['deployments', selectedNamespace] });
       showScaleModal = false;
       activeDeployment = null;
@@ -372,11 +409,16 @@
 
   async function handleRestart(dName: string) {
     if (!selectedNamespace) return;
+    openLogs(selectedNamespace, dName);
+    activityLog.push(`deploy:${selectedNamespace}/${dName}`, 'info', 'RestartDeployment API…');
     try {
       await restartDeployment(selectedNamespace, dName);
       queryClient.invalidateQueries({ queryKey: ['deployments', selectedNamespace] });
+      activityLog.push(`deploy:${selectedNamespace}/${dName}`, 'success', 'Rolling restart accepted.');
     } catch (err: any) {
-      alert(err.message || 'Failed to trigger rolling restart');
+      const msg = err.message || 'Failed to trigger rolling restart';
+      activityLog.push(`deploy:${selectedNamespace}/${dName}`, 'error', msg);
+      alert(msg);
     }
   }
 
@@ -399,14 +441,11 @@
   }
 </script>
 
-<div class="space-y-6">
-  <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Deployments</h1>
-      <p class="mt-1 text-sm text-muted-foreground">
-        Manage stateless workloads, microservices, container configurations, and scaling.
-      </p>
-    </div>
+<div class="page-stack">
+  <PageHeader
+    title="Deployments"
+    description="Manage stateless workloads, microservices, container configurations, and scaling."
+  >
 
     {#if openAppError}
       <div
@@ -463,22 +502,16 @@
         </button>
       {/if}
     </div>
-  </div>
+  </PageHeader>
 
   {#if !selectedNamespace}
-    <div class="flex flex-col items-center justify-center rounded-lg border border-dashed border-border p-16 text-center">
-      <AlertCircle class="mb-4 h-12 w-12 text-muted-foreground/40" />
-      <h3 class="text-lg font-semibold">Select namespace</h3>
-      <p class="mt-2 text-sm text-muted-foreground max-w-sm">
-        Select a tenant namespace from the dropdown above to manage deployments.
-      </p>
-    </div>
+    <EmptyState
+      icon={AlertCircle}
+      title="Select namespace"
+      description="Select a tenant namespace from the dropdown above to manage deployments."
+    />
   {:else if deploymentsQuery.isPending}
-    <div class="space-y-4">
-      <div class="h-12 w-full animate-pulse rounded bg-muted"></div>
-      <div class="h-20 w-full animate-pulse rounded bg-muted"></div>
-      <div class="h-20 w-full animate-pulse rounded bg-muted"></div>
-    </div>
+    <Skeleton variant="table" rows={6} />
   {:else if deploymentsQuery.error}
     <Card class="border-destructive bg-destructive/5">
       <CardContent class="py-6">
@@ -488,24 +521,22 @@
       </CardContent>
     </Card>
   {:else if !deploymentsQuery.data || deploymentsQuery.data.deployments.length === 0}
-    <div class="flex flex-col items-center justify-center rounded-lg border border-dashed border-border p-16 text-center">
-      <Container class="mb-4 h-12 w-12 text-muted-foreground/40" />
-      <h3 class="text-lg font-semibold">No deployments in this namespace</h3>
-      <p class="mt-2 text-sm text-muted-foreground max-w-sm">
-        Launch your first containerized application in namespace <span class="font-mono">{selectedNamespace}</span>.
-      </p>
+    <EmptyState
+      icon={Container}
+      title="No deployments in this namespace"
+      description="Launch your first containerized application in namespace {selectedNamespace}."
+    >
       {#if canWrite}
         <button
           onclick={() => showCreateModal = true}
-          class="mt-4 inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          class="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
         >
           Deploy Container
         </button>
       {/if}
-    </div>
+    </EmptyState>
   {:else}
-    <div class="border border-border rounded-lg bg-card overflow-x-auto">
-      <table class="w-full min-w-[72rem] text-left border-collapse">
+    <DataTable minWidth="64rem">
         <thead>
           <tr class="border-b border-border bg-muted/40 text-xs font-semibold text-muted-foreground uppercase">
             <th class="px-5 py-3">Deployment Name</th>
@@ -534,10 +565,7 @@
               </td>
               <td class="px-5 py-3.5">
                 <span
-                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
-                  {d.status === 'Running' ? 'bg-emerald-500/10 text-emerald-500' :
-                   d.status === 'Progressing' ? 'bg-indigo-500/10 text-indigo-500' :
-                   d.status === 'ScaledToZero' ? 'bg-muted text-muted-foreground' : 'bg-amber-500/10 text-amber-500'}"
+                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {statusBadgeClass(d.status)}"
                 >
                   {d.status}
                 </span>
@@ -563,7 +591,7 @@
                   {/if}
                 </button>
                 <p class="mt-1 text-muted-foreground">
-                  Open App → localhost (works now). Ingress needs hosts setup.
+                  Opens on localhost (auto port-forward). No 127.0.0.1:18xxx.
                 </p>
                 <div class="mt-1.5 space-y-0.5 font-mono text-[11px] text-muted-foreground">
                   {#if d.clusterIp}
@@ -601,6 +629,14 @@
                 {/if}
 
                 <div class="mt-2 flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onclick={() => openLogs(d.namespace, d.name)}
+                    class="inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 py-0.5 text-[11px] font-medium text-foreground hover:bg-accent"
+                  >
+                    <Terminal class="h-3 w-3" />
+                    View logs
+                  </button>
                   {#if isDatabaseImage(d.image)}
                     <button
                       type="button"
@@ -611,14 +647,6 @@
                       Browse data
                     </button>
                   {/if}
-                  <button
-                    type="button"
-                    onclick={() => router.navigate('/workloads')}
-                    class="inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 py-0.5 text-[11px] font-medium text-foreground hover:bg-accent"
-                  >
-                    <Terminal class="h-3 w-3" />
-                    View logs
-                  </button>
                 </div>
               </td>
               <td class="px-5 py-3.5 text-muted-foreground text-xs">
@@ -627,7 +655,20 @@
               {#if canWrite}
                 <td class="px-5 py-3.5 text-right flex items-center justify-end gap-2">
                   <button
-                    onclick={() => { activeDeployment = d; targetReplicas = d.replicas; showScaleModal = true; }}
+                    type="button"
+                    onclick={() => openLogs(d.namespace, d.name)}
+                    class="inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-xs font-medium text-foreground hover:bg-accent"
+                  >
+                    <Terminal class="h-3 w-3" />
+                    Logs
+                  </button>
+                  <button
+                    onclick={() => {
+                      activeDeployment = d;
+                      targetReplicas = d.replicas;
+                      scaleAutoscaling = d.autoscaling ? { ...d.autoscaling } : emptyAutoscaling();
+                      showScaleModal = true;
+                    }}
                     class="inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-xs font-medium text-foreground hover:bg-accent"
                   >
                     <Scale class="h-3 w-3" />
@@ -672,742 +713,790 @@
             </tr>
           {/each}
         </tbody>
-      </table>
-    </div>
+    </DataTable>
   {/if}
 </div>
 
 <!-- Deploy Modal -->
-{#if showCreateModal && canWrite}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-    <div class="flex max-h-[90vh] w-full max-w-xl flex-col rounded-xl border border-border bg-card shadow-lg">
-      <div class="flex items-center justify-between border-b border-border p-6 pb-3">
-        <h2 class="text-lg font-semibold">Deploy Containerized Workload</h2>
-        <button
-          onclick={() => showCreateModal = false}
-          class="rounded-md p-1 hover:bg-accent hover:text-accent-foreground text-muted-foreground"
+<Modal
+  open={showCreateModal && canWrite}
+  title="Deploy Containerized Workload"
+  size="lg"
+  onclose={() => (showCreateModal = false)}
+>
+  <form id="deploy-workload-form" onsubmit={handleDeploy} class="space-y-4">
+    {#if errorMsg}
+      <p class="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{errorMsg}</p>
+    {/if}
+
+    <!-- Golden paths -->
+    <div class="space-y-2">
+      <div class="flex items-center justify-between">
+        <div>
+          <span class="text-sm font-medium">Start from a template</span>
+          <p class="text-xs text-muted-foreground">
+            Reviewed defaults for replicas, resources, ports, probes and config.
+            You supply the image, name and version.
+          </p>
+        </div>
+        {#if selectedTemplateId}
+          <button type="button" onclick={clearTemplate} class="text-xs font-semibold text-primary hover:underline">
+            Clear
+          </button>
+        {/if}
+      </div>
+
+      {#if templatesQuery.isPending}
+        <div class="h-16 w-full animate-pulse rounded bg-muted"></div>
+      {:else if templatesQuery.data}
+        <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {#each templatesQuery.data as tpl}
+            <button
+              type="button"
+              onclick={() => applyTemplate(tpl)}
+              class="rounded-md border p-2.5 text-left transition-colors
+              {selectedTemplateId === tpl.id
+                ? 'border-primary bg-primary/5'
+                : 'border-input hover:bg-accent/40'}"
+            >
+              <span class="flex items-center gap-1.5 text-xs font-semibold">
+                <Layers class="h-3 w-3 text-primary" />
+                {tpl.name}
+              </span>
+              <p class="mt-0.5 text-[11px] leading-snug text-muted-foreground">{tpl.description}</p>
+            </button>
+          {/each}
+        </div>
+      {/if}
+
+      {#if activeTemplate}
+        <div class="rounded-md bg-muted/50 p-2.5 text-xs text-muted-foreground">
+          <p>{activeTemplate.rationale}</p>
+          {#if activeTemplate.exampleImage}
+            <p class="mt-1.5">
+              Example image: <span class="font-mono text-foreground">{activeTemplate.exampleImage}</span>
+            </p>
+          {/if}
+          {#if activeTemplate.suggestedSecretKeys.length > 0}
+            <p class="mt-1">
+              Secrets to fill in: <span class="font-mono">{activeTemplate.suggestedSecretKeys.join(', ')}</span>
+              — names only, no values are supplied.
+            </p>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div class="space-y-1.5">
+        <label for="appName" class="text-sm font-medium">Deployment Name</label>
+        <input
+          id="appName"
+          type="text"
+          required
+          pattern="[a-z0-9]([-a-z0-9]*[a-z0-9])?"
+          placeholder="e.g. backend-api"
+          bind:value={appName}
+          class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+      <div class="space-y-1.5">
+        <label for="appReplicas" class="text-sm font-medium">Initial Replicas</label>
+        <input
+          id="appReplicas"
+          type="number"
+          min="1"
+          max="10"
+          required
+          bind:value={appReplicas}
+          class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+    </div>
+
+    <div class="space-y-1.5">
+      <label for="appImage" class="text-sm font-medium">Container Image (Docker Registry)</label>
+      <input
+        id="appImage"
+        type="text"
+        required
+        placeholder="e.g. nginx:alpine, redis:7-alpine"
+        bind:value={appImage}
+        class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+      />
+    </div>
+
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div class="space-y-1.5">
+        <label for="appPort" class="text-sm font-medium">Container Port</label>
+        <input
+          id="appPort"
+          type="number"
+          min="1"
+          max="65535"
+          required
+          bind:value={appPort}
+          class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+        <p class="text-xs text-muted-foreground">
+          Port your image listens on — nginx 80, redis 6379.
+        </p>
+      </div>
+      <div class="space-y-1.5">
+        <label for="appServiceType" class="text-sm font-medium">Exposure</label>
+        <select
+          id="appServiceType"
+          bind:value={appServiceType}
+          class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
         >
-          <X class="h-5 w-5" />
+          <option value="NodePort">NodePort — reachable outside the cluster</option>
+          <option value="ClusterIP">ClusterIP — in-cluster only</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Config variables → ConfigMap -->
+    <div class="space-y-2">
+      <div class="flex items-center justify-between">
+        <div>
+          <span class="text-sm font-medium">Config Variables</span>
+          <p class="text-xs text-muted-foreground">
+            Non-sensitive — NODE_ENV, LOG_LEVEL. Stored in a ConfigMap.
+          </p>
+        </div>
+        <button
+          type="button"
+          onclick={() => (configVars = [...configVars, { key: '', value: '' }])}
+          class="text-xs font-semibold text-primary hover:underline"
+        >
+          + Add
         </button>
       </div>
 
-      <form onsubmit={handleDeploy} class="min-h-0 flex-1 space-y-4 overflow-y-auto p-6 pt-4">
-        {#if errorMsg}
-          <p class="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{errorMsg}</p>
-        {/if}
-
-        <!-- Golden paths -->
-        <div class="space-y-2">
-          <div class="flex items-center justify-between">
-            <div>
-              <span class="text-sm font-medium">Start from a template</span>
-              <p class="text-xs text-muted-foreground">
-                Reviewed defaults for replicas, resources, ports, probes and config.
-                You supply the image, name and version.
-              </p>
-            </div>
-            {#if selectedTemplateId}
-              <button type="button" onclick={clearTemplate} class="text-xs font-semibold text-primary hover:underline">
-                Clear
-              </button>
-            {/if}
-          </div>
-
-          {#if templatesQuery.isPending}
-            <div class="h-16 w-full animate-pulse rounded bg-muted"></div>
-          {:else if templatesQuery.data}
-            <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {#each templatesQuery.data as tpl}
-                <button
-                  type="button"
-                  onclick={() => applyTemplate(tpl)}
-                  class="rounded-md border p-2.5 text-left transition-colors
-                  {selectedTemplateId === tpl.id
-                    ? 'border-primary bg-primary/5'
-                    : 'border-input hover:bg-accent/40'}"
-                >
-                  <span class="flex items-center gap-1.5 text-xs font-semibold">
-                    <Layers class="h-3 w-3 text-primary" />
-                    {tpl.name}
-                  </span>
-                  <p class="mt-0.5 text-[11px] leading-snug text-muted-foreground">{tpl.description}</p>
-                </button>
-              {/each}
-            </div>
-          {/if}
-
-          {#if activeTemplate}
-            <div class="rounded-md bg-muted/50 p-2.5 text-xs text-muted-foreground">
-              <p>{activeTemplate.rationale}</p>
-              {#if activeTemplate.exampleImage}
-                <p class="mt-1.5">
-                  Example image: <span class="font-mono text-foreground">{activeTemplate.exampleImage}</span>
-                </p>
-              {/if}
-              {#if activeTemplate.suggestedSecretKeys.length > 0}
-                <p class="mt-1">
-                  Secrets to fill in: <span class="font-mono">{activeTemplate.suggestedSecretKeys.join(', ')}</span>
-                  — names only, no values are supplied.
-                </p>
-              {/if}
-            </div>
-          {/if}
-        </div>
-
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div class="space-y-1.5">
-            <label for="appName" class="text-sm font-medium">Deployment Name</label>
+      <div class="space-y-2">
+        {#each configVars as ev, idx}
+          <div class="flex items-center gap-2">
             <input
-              id="appName"
               type="text"
-              required
-              pattern="[a-z0-9]([-a-z0-9]*[a-z0-9])?"
-              placeholder="e.g. backend-api"
-              bind:value={appName}
-              class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+              placeholder="Key (e.g. NODE_ENV)"
+              bind:value={ev.key}
+              class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring"
             />
-          </div>
-          <div class="space-y-1.5">
-            <label for="appReplicas" class="text-sm font-medium">Initial Replicas</label>
             <input
-              id="appReplicas"
-              type="number"
-              min="1"
-              max="10"
-              required
-              bind:value={appReplicas}
-              class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+              type="text"
+              placeholder="Value"
+              bind:value={ev.value}
+              class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
             />
-          </div>
-        </div>
-
-        <div class="space-y-1.5">
-          <label for="appImage" class="text-sm font-medium">Container Image (Docker Registry)</label>
-          <input
-            id="appImage"
-            type="text"
-            required
-            placeholder="e.g. nginx:alpine, redis:7-alpine"
-            bind:value={appImage}
-            class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </div>
-
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div class="space-y-1.5">
-            <label for="appPort" class="text-sm font-medium">Container Port</label>
-            <input
-              id="appPort"
-              type="number"
-              min="1"
-              max="65535"
-              required
-              bind:value={appPort}
-              class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
-            />
-            <p class="text-xs text-muted-foreground">
-              Port your image listens on — nginx 80, redis 6379.
-            </p>
-          </div>
-          <div class="space-y-1.5">
-            <label for="appServiceType" class="text-sm font-medium">Exposure</label>
-            <select
-              id="appServiceType"
-              bind:value={appServiceType}
-              class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
-            >
-              <option value="NodePort">NodePort — reachable outside the cluster</option>
-              <option value="ClusterIP">ClusterIP — in-cluster only</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Config variables → ConfigMap -->
-        <div class="space-y-2">
-          <div class="flex items-center justify-between">
-            <div>
-              <span class="text-sm font-medium">Config Variables</span>
-              <p class="text-xs text-muted-foreground">
-                Non-sensitive — NODE_ENV, LOG_LEVEL. Stored in a ConfigMap.
-              </p>
-            </div>
             <button
               type="button"
-              onclick={() => (configVars = [...configVars, { key: '', value: '' }])}
-              class="text-xs font-semibold text-primary hover:underline"
+              onclick={() => (configVars = configVars.filter((_, i) => i !== idx))}
+              aria-label="Remove config variable"
+              class="text-muted-foreground hover:text-destructive p-1"
             >
-              + Add
+              <X class="h-4 w-4" />
             </button>
+          </div>
+        {/each}
+      </div>
+    </div>
+
+    <!-- Secret variables → Secret -->
+    <div class="space-y-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
+      <div class="flex items-center justify-between">
+        <div>
+          <span class="flex items-center gap-1.5 text-sm font-medium">
+            <KeyRound class="h-3.5 w-3.5 text-amber-500" />
+            Secret Variables
+          </span>
+          <p class="text-xs text-muted-foreground">
+            DB_PASSWORD, API_KEY, JWT_SECRET. Stored in a Secret — never shown again.
+          </p>
+        </div>
+        <button
+          type="button"
+          onclick={() => (secretVars = [...secretVars, { key: '', value: '' }])}
+          class="text-xs font-semibold text-primary hover:underline"
+        >
+          + Add
+        </button>
+      </div>
+
+      <div class="space-y-2">
+        {#each secretVars as sv, idx}
+          <div class="flex items-center gap-2">
+            <input
+              type="text"
+              placeholder="Key (e.g. DB_PASSWORD)"
+              bind:value={sv.key}
+              class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            <input
+              type="password"
+              autocomplete="new-password"
+              placeholder="Value"
+              bind:value={sv.value}
+              class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            <button
+              type="button"
+              onclick={() => (secretVars = secretVars.filter((_, i) => i !== idx))}
+              aria-label="Remove secret variable"
+              class="text-muted-foreground hover:text-destructive p-1"
+            >
+              <X class="h-4 w-4" />
+            </button>
+          </div>
+        {/each}
+        {#if secretVars.length === 0}
+          <p class="text-xs text-muted-foreground">No secret variables.</p>
+        {/if}
+      </div>
+    </div>
+
+    <!-- Routing and health checks -->
+    <div class="rounded-md border border-border">
+      <button
+        type="button"
+        onclick={() => (showAdvanced = !showAdvanced)}
+        class="flex w-full items-center justify-between px-3 py-2 text-sm font-medium hover:bg-accent/40"
+      >
+        <span>Routing &amp; Health Checks</span>
+        <span class="text-xs text-muted-foreground">{showAdvanced ? 'Hide' : 'Show'}</span>
+      </button>
+
+      {#if showAdvanced}
+        <div class="space-y-4 border-t border-border p-3">
+          <!-- Ingress -->
+          <div class="space-y-1.5">
+            <label for="appHostname" class="text-sm font-medium">Custom Hostname</label>
+            <input
+              id="appHostname"
+              type="text"
+              placeholder="leave blank for {appName || '<name>'}.<project>.idp.local"
+              bind:value={appHostname}
+              disabled={appIngressDisabled}
+              class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+            />
+            <label class="flex items-center gap-2 text-xs text-muted-foreground">
+              <input type="checkbox" bind:checked={appIngressDisabled} class="rounded border-input" />
+              Internal only — do not create an Ingress
+            </label>
+          </div>
+
+          <!-- Resources -->
+          <div class="space-y-2">
+            <div>
+              <span class="text-sm font-medium">Resources</span>
+              <p class="text-xs text-muted-foreground">
+                Kubernetes quantities — 250m, 1, 512Mi, 1Gi. Blank leaves the field unset so a
+                namespace LimitRange still applies.
+              </p>
+            </div>
+            <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <input type="text" placeholder="CPU request" bind:value={appResources.cpuRequest}
+                class="rounded-md border border-input bg-background px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring" />
+              <input type="text" placeholder="CPU limit" bind:value={appResources.cpuLimit}
+                class="rounded-md border border-input bg-background px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring" />
+              <input type="text" placeholder="Memory request" bind:value={appResources.memoryRequest}
+                class="rounded-md border border-input bg-background px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring" />
+              <input type="text" placeholder="Memory limit" bind:value={appResources.memoryLimit}
+                class="rounded-md border border-input bg-background px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring" />
+            </div>
           </div>
 
           <div class="space-y-2">
-            {#each configVars as ev, idx}
-              <div class="flex items-center gap-2">
-                <input
-                  type="text"
-                  placeholder="Key (e.g. NODE_ENV)"
-                  bind:value={ev.key}
-                  class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring"
-                />
-                <input
-                  type="text"
-                  placeholder="Value"
-                  bind:value={ev.value}
-                  class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
-                />
-                <button
-                  type="button"
-                  onclick={() => (configVars = configVars.filter((_, i) => i !== idx))}
-                  aria-label="Remove config variable"
-                  class="text-muted-foreground hover:text-destructive p-1"
-                >
-                  <X class="h-4 w-4" />
-                </button>
-              </div>
-            {/each}
-          </div>
-        </div>
-
-        <!-- Secret variables → Secret -->
-        <div class="space-y-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
-          <div class="flex items-center justify-between">
             <div>
-              <span class="flex items-center gap-1.5 text-sm font-medium">
-                <KeyRound class="h-3.5 w-3.5 text-amber-500" />
-                Secret Variables
-              </span>
+              <span class="text-sm font-medium">Autoscaling</span>
               <p class="text-xs text-muted-foreground">
-                DB_PASSWORD, API_KEY, JWT_SECRET. Stored in a Secret — never shown again.
+                Horizontal Pod Autoscaler. Max replicas above 1 creates an HPA on CPU utilisation.
+                Requires resource requests (filled automatically if blank) and metrics-server.
               </p>
             </div>
-            <button
-              type="button"
-              onclick={() => (secretVars = [...secretVars, { key: '', value: '' }])}
-              class="text-xs font-semibold text-primary hover:underline"
-            >
-              + Add
-            </button>
-          </div>
-
-          <div class="space-y-2">
-            {#each secretVars as sv, idx}
-              <div class="flex items-center gap-2">
-                <input
-                  type="text"
-                  placeholder="Key (e.g. DB_PASSWORD)"
-                  bind:value={sv.key}
-                  class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring"
-                />
-                <input
-                  type="password"
-                  autocomplete="new-password"
-                  placeholder="Value"
-                  bind:value={sv.value}
-                  class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
-                />
-                <button
-                  type="button"
-                  onclick={() => (secretVars = secretVars.filter((_, i) => i !== idx))}
-                  aria-label="Remove secret variable"
-                  class="text-muted-foreground hover:text-destructive p-1"
-                >
-                  <X class="h-4 w-4" />
-                </button>
-              </div>
-            {/each}
-            {#if secretVars.length === 0}
-              <p class="text-xs text-muted-foreground">No secret variables.</p>
-            {/if}
-          </div>
-        </div>
-
-        <!-- Routing and health checks -->
-        <div class="rounded-md border border-border">
-          <button
-            type="button"
-            onclick={() => (showAdvanced = !showAdvanced)}
-            class="flex w-full items-center justify-between px-3 py-2 text-sm font-medium hover:bg-accent/40"
-          >
-            <span>Routing &amp; Health Checks</span>
-            <span class="text-xs text-muted-foreground">{showAdvanced ? 'Hide' : 'Show'}</span>
-          </button>
-
-          {#if showAdvanced}
-            <div class="space-y-4 border-t border-border p-3">
-              <!-- Ingress -->
-              <div class="space-y-1.5">
-                <label for="appHostname" class="text-sm font-medium">Custom Hostname</label>
-                <input
-                  id="appHostname"
-                  type="text"
-                  placeholder="leave blank for {appName || '<name>'}.<project>.idp.local"
-                  bind:value={appHostname}
-                  disabled={appIngressDisabled}
-                  class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
-                />
-                <label class="flex items-center gap-2 text-xs text-muted-foreground">
-                  <input type="checkbox" bind:checked={appIngressDisabled} class="rounded border-input" />
-                  Internal only — do not create an Ingress
+            <label class="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={appAutoscaling.maxReplicas > 1}
+                onchange={(e) => {
+                  const on = (e.currentTarget as HTMLInputElement).checked;
+                  appAutoscaling = on
+                    ? { minReplicas: Math.max(appReplicas, 1), maxReplicas: Math.max(appReplicas * 3, 4), cpuAverageUtilization: 70, memoryAverageUtilization: 0 }
+                    : emptyAutoscaling();
+                }}
+                class="rounded border-input"
+              />
+              Scale pods automatically with traffic
+            </label>
+            {#if appAutoscaling.maxReplicas > 1}
+              <div class="grid grid-cols-3 gap-2">
+                <label class="text-xs">
+                  Min
+                  <input type="number" min="1" max="50" bind:value={appAutoscaling.minReplicas}
+                    class="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs" />
+                </label>
+                <label class="text-xs">
+                  Max
+                  <input type="number" min="2" max="50" bind:value={appAutoscaling.maxReplicas}
+                    class="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs" />
+                </label>
+                <label class="text-xs">
+                  CPU target %
+                  <input type="number" min="10" max="100" bind:value={appAutoscaling.cpuAverageUtilization}
+                    class="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs" />
                 </label>
               </div>
-
-              <!-- Resources -->
-              <div class="space-y-2">
-                <div>
-                  <span class="text-sm font-medium">Resources</span>
-                  <p class="text-xs text-muted-foreground">
-                    Kubernetes quantities — 250m, 1, 512Mi, 1Gi. Blank leaves the field unset so a
-                    namespace LimitRange still applies.
-                  </p>
-                </div>
-                <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <input type="text" placeholder="CPU request" bind:value={appResources.cpuRequest}
-                    class="rounded-md border border-input bg-background px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring" />
-                  <input type="text" placeholder="CPU limit" bind:value={appResources.cpuLimit}
-                    class="rounded-md border border-input bg-background px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring" />
-                  <input type="text" placeholder="Memory request" bind:value={appResources.memoryRequest}
-                    class="rounded-md border border-input bg-background px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring" />
-                  <input type="text" placeholder="Memory limit" bind:value={appResources.memoryLimit}
-                    class="rounded-md border border-input bg-background px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring" />
-                </div>
-              </div>
-
-              <!-- Probes -->
-              {#each [{ label: 'Readiness Probe', probe: readinessProbe, hint: 'Removes the pod from the Service until it passes.' }, { label: 'Liveness Probe', probe: livenessProbe, hint: 'Restarts the container when it fails. Leave blank unless the app has a real health endpoint.' }] as section}
-                <div class="space-y-2">
-                  <div>
-                    <span class="text-sm font-medium">{section.label}</span>
-                    <p class="text-xs text-muted-foreground">{section.hint}</p>
-                  </div>
-                  <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                    <input
-                      type="text"
-                      placeholder="Path (e.g. /healthz)"
-                      bind:value={section.probe.path}
-                      class="col-span-2 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring sm:col-span-3"
-                    />
-                    <input type="number" min="0" max="65535" placeholder="Port (container port)" bind:value={section.probe.port}
-                      class="rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring" />
-                    <input type="number" min="0" placeholder="Initial delay (s)" bind:value={section.probe.initialDelaySeconds}
-                      class="rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring" />
-                    <input type="number" min="0" placeholder="Timeout (1s)" bind:value={section.probe.timeoutSeconds}
-                      class="rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring" />
-                    <input type="number" min="0" placeholder="Period (10s)" bind:value={section.probe.periodSeconds}
-                      class="rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring" />
-                    <input type="number" min="0" placeholder="Failure threshold (3)" bind:value={section.probe.failureThreshold}
-                      class="rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring" />
-                  </div>
-                </div>
-              {/each}
-
-              <p class="text-xs text-muted-foreground">
-                Leave the path blank to skip a probe entirely. Blank numeric fields use the Kubernetes defaults shown.
-              </p>
-            </div>
-          {/if}
-        </div>
-
-        <div class="sticky bottom-0 -mx-6 -mb-6 flex justify-end gap-3 border-t border-border bg-card px-6 py-3">
-          <button
-            type="button"
-            onclick={() => showCreateModal = false}
-            class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            class="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-          >
-            {isSubmitting ? 'Deploying...' : 'Deploy'}
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-{/if}
-
-<!-- Rollout History Modal -->
-{#if showHistoryModal && historyTarget}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-    <div class="w-full max-w-3xl rounded-xl border border-border bg-card p-6 shadow-lg max-h-[90vh] overflow-y-auto">
-      <div class="flex items-center justify-between border-b border-border pb-3">
-        <div>
-          <h2 class="text-lg font-semibold">Deployment History — {historyTarget.name}</h2>
-          <p class="mt-0.5 text-xs text-muted-foreground">
-            Revisions Kubernetes retains for this Deployment, newest first.
-          </p>
-        </div>
-        <button
-          onclick={() => { showHistoryModal = false; historyTarget = null; }}
-          aria-label="Close"
-          class="rounded-md p-1 hover:bg-accent text-muted-foreground"
-        >
-          <X class="h-5 w-5" />
-        </button>
-      </div>
-
-      {#if errorMsg}
-        <p class="mt-4 text-sm text-destructive bg-destructive/10 p-3 rounded-md">{errorMsg}</p>
-      {/if}
-      {#if historyNotice}
-        <p class="mt-4 text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 p-3 rounded-md">
-          {historyNotice}
-        </p>
-      {/if}
-
-      {#if isLoadingHistory}
-        <div class="mt-6 space-y-3">
-          <div class="h-10 w-full animate-pulse rounded bg-muted"></div>
-          <div class="h-10 w-full animate-pulse rounded bg-muted"></div>
-        </div>
-      {:else if rollouts.length === 0}
-        <div class="mt-6 flex flex-col items-center justify-center rounded-lg border border-dashed border-border p-10 text-center">
-          <History class="mb-3 h-10 w-10 text-muted-foreground/40" />
-          <p class="text-sm font-medium">No revision history</p>
-          <p class="mt-1 text-xs text-muted-foreground max-w-sm">
-            Kubernetes records a revision each time the pod template changes. This deployment has not
-            been updated since it was created.
-          </p>
-        </div>
-      {:else}
-        <div class="mt-4 overflow-x-auto rounded-lg border border-border">
-          <table class="w-full min-w-[48rem] text-left border-collapse">
-            <thead>
-              <tr class="border-b border-border bg-muted/40 text-xs font-semibold text-muted-foreground uppercase">
-                <th class="px-4 py-2.5">Revision</th>
-                <th class="px-4 py-2.5">Timestamp</th>
-                <th class="px-4 py-2.5">Image</th>
-                <th class="px-4 py-2.5">Replicas</th>
-                <th class="px-4 py-2.5">Status</th>
-                {#if canWrite}
-                  <th class="px-4 py-2.5 text-right">Action</th>
-                {/if}
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-border text-sm">
-              {#each rollouts as r}
-                <tr class="hover:bg-accent/20 transition-colors">
-                  <td class="px-4 py-3 font-medium">#{r.revision}</td>
-                  <td class="px-4 py-3 text-xs text-muted-foreground">
-                    {r.createdAt ? new Date(r.createdAt).toLocaleString() : '—'}
-                  </td>
-                  <td class="px-4 py-3 font-mono text-xs text-muted-foreground max-w-[16rem] truncate">
-                    {r.image || '—'}
-                    {#if r.changeCause}
-                      <p class="mt-0.5 text-[11px] italic text-muted-foreground/70">{r.changeCause}</p>
-                    {/if}
-                  </td>
-                  <td class="px-4 py-3 text-xs">
-                    {r.readyReplicas} / {r.replicas}
-                  </td>
-                  <td class="px-4 py-3">
-                    <span
-                      class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
-                      {r.current ? 'bg-emerald-500/10 text-emerald-500' : 'bg-muted text-muted-foreground'}"
-                    >
-                      {r.status}
-                    </span>
-                  </td>
-                  {#if canWrite}
-                    <td class="px-4 py-3 text-right">
-                      {#if r.current}
-                        <span class="text-xs text-muted-foreground">current</span>
-                      {:else}
-                        <button
-                          onclick={() => handleRollback(r.revision)}
-                          disabled={rollingBackTo !== null}
-                          class="inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
-                        >
-                          <Undo2 class="h-3 w-3" />
-                          {rollingBackTo === r.revision ? 'Rolling back...' : 'Rollback'}
-                        </button>
-                      {/if}
-                    </td>
-                  {/if}
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-
-        <p class="mt-3 text-xs text-muted-foreground">
-          Rolling back restores that revision's pod template and creates a new revision — the history
-          is never rewritten. How far back this list goes is set by the Deployment's
-          <span class="font-mono">revisionHistoryLimit</span> (default 10).
-        </p>
-      {/if}
-
-      <div class="mt-6 flex justify-end">
-        <button
-          type="button"
-          onclick={() => { showHistoryModal = false; historyTarget = null; }}
-          class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent"
-        >
-          Close
-        </button>
-      </div>
-    </div>
-  </div>
-{/if}
-
-<!-- Configuration Modal -->
-{#if showConfigModal && configTarget && canWrite}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-    <div class="w-full max-w-2xl rounded-xl border border-border bg-card p-6 shadow-lg max-h-[90vh] overflow-y-auto">
-      <div class="flex items-center justify-between border-b border-border pb-3">
-        <div>
-          <h2 class="text-lg font-semibold">Configuration — {configTarget.name}</h2>
-          <p class="mt-0.5 text-xs text-muted-foreground font-mono">
-            {configTarget.configMapName} · {configTarget.secretName}
-          </p>
-        </div>
-        <button
-          onclick={() => { showConfigModal = false; configTarget = null; }}
-          aria-label="Close"
-          class="rounded-md p-1 hover:bg-accent text-muted-foreground"
-        >
-          <X class="h-5 w-5" />
-        </button>
-      </div>
-
-      {#if isLoadingConfig}
-        <div class="mt-6 space-y-3">
-          <div class="h-8 w-full animate-pulse rounded bg-muted"></div>
-          <div class="h-8 w-full animate-pulse rounded bg-muted"></div>
-        </div>
-      {:else}
-        <form onsubmit={handleSaveConfig} class="mt-4 space-y-5">
-          {#if errorMsg}
-            <p class="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{errorMsg}</p>
-          {/if}
-          {#if configNotice}
-            <p class="text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 p-3 rounded-md">
-              {configNotice}
-            </p>
-          {/if}
-
-          <!-- Config variables -->
-          <div class="space-y-2">
-            <div class="flex items-center justify-between">
-              <div>
-                <span class="text-sm font-medium">Config Variables</span>
-                <p class="text-xs text-muted-foreground">Visible in the ConfigMap. Safe for non-sensitive values.</p>
-              </div>
-              <button
-                type="button"
-                onclick={() => (editConfigVars = [...editConfigVars, { key: '', value: '' }])}
-                class="text-xs font-semibold text-primary hover:underline"
-              >
-                + Add
-              </button>
-            </div>
-
-            <div class="space-y-2">
-              {#each editConfigVars as ev, idx}
-                <div class="flex items-center gap-2">
-                  <input
-                    type="text"
-                    placeholder="Key"
-                    bind:value={ev.key}
-                    class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Value"
-                    bind:value={ev.value}
-                    class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
-                  <button
-                    type="button"
-                    onclick={() => (editConfigVars = editConfigVars.filter((_, i) => i !== idx))}
-                    aria-label="Remove config variable"
-                    class="text-muted-foreground hover:text-destructive p-1"
-                  >
-                    <X class="h-4 w-4" />
-                  </button>
-                </div>
-              {/each}
-              {#if editConfigVars.length === 0}
-                <p class="text-xs text-muted-foreground">No config variables.</p>
-              {/if}
-            </div>
+            {/if}
           </div>
 
-          <!-- Secret variables -->
-          <div class="space-y-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
-            <div class="flex items-center justify-between">
-              <div>
-                <span class="flex items-center gap-1.5 text-sm font-medium">
-                  <KeyRound class="h-3.5 w-3.5 text-amber-500" />
-                  Secret Variables
-                </span>
-                <p class="text-xs text-muted-foreground">
-                  Values are write-only. Leave blank to keep the stored value.
-                </p>
-              </div>
-              <button
-                type="button"
-                onclick={() => (editSecretVars = [...editSecretVars, { key: '', value: '', isExisting: false }])}
-                class="text-xs font-semibold text-primary hover:underline"
-              >
-                + Add
-              </button>
-            </div>
-
+          <!-- Probes -->
+          {#each [{ label: 'Readiness Probe', probe: readinessProbe, hint: 'Removes the pod from the Service until it passes.' }, { label: 'Liveness Probe', probe: livenessProbe, hint: 'Restarts the container when it fails. Leave blank unless the app has a real health endpoint.' }] as section}
             <div class="space-y-2">
-              {#each editSecretVars as sv, idx}
-                <div class="flex items-center gap-2">
-                  <input
-                    type="text"
-                    placeholder="Key"
-                    readonly={sv.isExisting}
-                    bind:value={sv.key}
-                    class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring read-only:opacity-70"
-                  />
-                  <input
-                    type="password"
-                    autocomplete="new-password"
-                    placeholder={sv.isExisting ? '•••••••• (unchanged)' : 'Value'}
-                    bind:value={sv.value}
-                    class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
-                  <button
-                    type="button"
-                    onclick={() => removeSecretRow(idx)}
-                    aria-label="Remove secret variable"
-                    class="text-muted-foreground hover:text-destructive p-1"
-                  >
-                    <X class="h-4 w-4" />
-                  </button>
-                </div>
-              {/each}
-              {#if editSecretVars.length === 0}
-                <p class="text-xs text-muted-foreground">No secret variables.</p>
-              {/if}
-              {#if removedSecretKeys.length > 0}
-                <p class="text-xs text-destructive">
-                  Will delete on save: <span class="font-mono">{removedSecretKeys.join(', ')}</span>
-                </p>
-              {/if}
+              <div>
+                <span class="text-sm font-medium">{section.label}</span>
+                <p class="text-xs text-muted-foreground">{section.hint}</p>
+              </div>
+              <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <input
+                  type="text"
+                  placeholder="Path (e.g. /healthz)"
+                  bind:value={section.probe.path}
+                  class="col-span-2 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring sm:col-span-3"
+                />
+                <input type="number" min="0" max="65535" placeholder="Port (container port)" bind:value={section.probe.port}
+                  class="rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring" />
+                <input type="number" min="0" placeholder="Initial delay (s)" bind:value={section.probe.initialDelaySeconds}
+                  class="rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring" />
+                <input type="number" min="0" placeholder="Timeout (1s)" bind:value={section.probe.timeoutSeconds}
+                  class="rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring" />
+                <input type="number" min="0" placeholder="Period (10s)" bind:value={section.probe.periodSeconds}
+                  class="rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring" />
+                <input type="number" min="0" placeholder="Failure threshold (3)" bind:value={section.probe.failureThreshold}
+                  class="rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring" />
+              </div>
             </div>
-          </div>
+          {/each}
 
           <p class="text-xs text-muted-foreground">
-            Saving rolls the pods — containers only read environment variables at start.
+            Leave the path blank to skip a probe entirely. Blank numeric fields use the Kubernetes defaults shown.
           </p>
-
-          <div class="flex justify-end gap-3 pt-3 border-t border-border">
-            <button
-              type="button"
-              onclick={() => { showConfigModal = false; configTarget = null; }}
-              class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent"
-            >
-              Close
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              class="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            >
-              {isSubmitting ? 'Saving...' : 'Save & Roll'}
-            </button>
-          </div>
-        </form>
+        </div>
       {/if}
     </div>
-  </div>
-{/if}
 
-<!-- Scale Modal -->
-{#if showScaleModal && activeDeployment && canWrite}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-    <div class="w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-lg">
-      <div class="flex items-center justify-between border-b border-border pb-3">
-        <h2 class="text-lg font-semibold">Scale Workload</h2>
-        <button
-          onclick={() => showScaleModal = false}
-          class="rounded-md p-1 hover:bg-accent hover:text-accent-foreground text-muted-foreground"
-        >
-          <X class="h-5 w-5" />
-        </button>
-      </div>
+  </form>
 
-      <form onsubmit={handleScale} class="mt-4 space-y-4">
-        {#if errorMsg}
-          <p class="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{errorMsg}</p>
-        {/if}
+  {#snippet footer()}
+    <button
+      type="button"
+      onclick={() => (showCreateModal = false)}
+      class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent"
+    >
+      Cancel
+    </button>
+    <button
+      type="submit"
+      form="deploy-workload-form"
+      disabled={isSubmitting}
+      class="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+    >
+      {isSubmitting ? 'Deploying...' : 'Deploy'}
+    </button>
+  {/snippet}
+</Modal>
 
-        <p class="text-sm text-muted-foreground">
-          Scale replicas for deployment <span class="font-mono text-foreground font-semibold">{activeDeployment.name}</span>.
+<!-- Rollout History Modal -->
+<Modal
+  open={showHistoryModal && !!historyTarget}
+  title={historyTarget ? `Deployment History — ${historyTarget.name}` : 'Deployment History'}
+  description="Revisions Kubernetes retains for this Deployment, newest first."
+  size="xl"
+  onclose={() => { showHistoryModal = false; historyTarget = null; }}
+>
+  {#if errorMsg}
+    <p class="mb-4 text-sm text-destructive bg-destructive/10 p-3 rounded-md">{errorMsg}</p>
+  {/if}
+  {#if historyNotice}
+    <p class="mb-4 text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 p-3 rounded-md">
+      {historyNotice}
+    </p>
+  {/if}
+
+  {#if isLoadingHistory}
+    <div class="space-y-3">
+      <div class="h-10 w-full animate-pulse rounded bg-muted"></div>
+      <div class="h-10 w-full animate-pulse rounded bg-muted"></div>
+    </div>
+  {:else if rollouts.length === 0}
+    <div class="flex flex-col items-center justify-center rounded-lg border border-dashed border-border p-10 text-center">
+      <History class="mb-3 h-10 w-10 text-muted-foreground/40" />
+      <p class="text-sm font-medium">No revision history</p>
+      <p class="mt-1 text-xs text-muted-foreground max-w-sm">
+        Kubernetes records a revision each time the pod template changes. This deployment has not
+        been updated since it was created.
+      </p>
+    </div>
+  {:else}
+    <div class="overflow-x-auto rounded-lg border border-border">
+      <table class="w-full min-w-[48rem] text-left border-collapse">
+        <thead>
+          <tr class="border-b border-border bg-muted/40 text-xs font-semibold text-muted-foreground uppercase">
+            <th class="px-4 py-2.5">Revision</th>
+            <th class="px-4 py-2.5">Timestamp</th>
+            <th class="px-4 py-2.5">Image</th>
+            <th class="px-4 py-2.5">Replicas</th>
+            <th class="px-4 py-2.5">Status</th>
+            {#if canWrite}
+              <th class="px-4 py-2.5 text-right">Action</th>
+            {/if}
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border text-sm">
+          {#each rollouts as r}
+            <tr class="hover:bg-accent/20 transition-colors">
+              <td class="px-4 py-3 font-medium">#{r.revision}</td>
+              <td class="px-4 py-3 text-xs text-muted-foreground">
+                {r.createdAt ? new Date(r.createdAt).toLocaleString() : '—'}
+              </td>
+              <td class="px-4 py-3 font-mono text-xs text-muted-foreground max-w-[16rem] truncate">
+                {r.image || '—'}
+                {#if r.changeCause}
+                  <p class="mt-0.5 text-[11px] italic text-muted-foreground/70">{r.changeCause}</p>
+                {/if}
+              </td>
+              <td class="px-4 py-3 text-xs">
+                {r.readyReplicas} / {r.replicas}
+              </td>
+              <td class="px-4 py-3">
+                <span
+                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
+                  {r.current ? 'bg-emerald-500/10 text-emerald-500' : 'bg-muted text-muted-foreground'}"
+                >
+                  {r.status}
+                </span>
+              </td>
+              {#if canWrite}
+                <td class="px-4 py-3 text-right">
+                  {#if r.current}
+                    <span class="text-xs text-muted-foreground">current</span>
+                  {:else}
+                    <button
+                      onclick={() => handleRollback(r.revision)}
+                      disabled={rollingBackTo !== null}
+                      class="inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
+                    >
+                      <Undo2 class="h-3 w-3" />
+                      {rollingBackTo === r.revision ? 'Rolling back...' : 'Rollback'}
+                    </button>
+                  {/if}
+                </td>
+              {/if}
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+
+    <p class="mt-3 text-xs text-muted-foreground">
+      Rolling back restores that revision's pod template and creates a new revision — the history
+      is never rewritten. How far back this list goes is set by the Deployment's
+      <span class="font-mono">revisionHistoryLimit</span> (default 10).
+    </p>
+  {/if}
+
+  {#snippet footer()}
+    <button
+      type="button"
+      onclick={() => { showHistoryModal = false; historyTarget = null; }}
+      class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent"
+    >
+      Close
+    </button>
+  {/snippet}
+</Modal>
+
+<!-- Configuration Modal -->
+<Modal
+  open={showConfigModal && !!configTarget && canWrite}
+  title={configTarget ? `Configuration — ${configTarget.name}` : 'Configuration'}
+  description={configTarget ? `${configTarget.configMapName} · ${configTarget.secretName}` : undefined}
+  size="lg"
+  onclose={() => { showConfigModal = false; configTarget = null; }}
+>
+  {#if isLoadingConfig}
+    <div class="space-y-3">
+      <div class="h-8 w-full animate-pulse rounded bg-muted"></div>
+      <div class="h-8 w-full animate-pulse rounded bg-muted"></div>
+    </div>
+  {:else}
+    <form id="deployment-config-form" onsubmit={handleSaveConfig} class="space-y-5">
+      {#if errorMsg}
+        <p class="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{errorMsg}</p>
+      {/if}
+      {#if configNotice}
+        <p class="text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 p-3 rounded-md">
+          {configNotice}
         </p>
+      {/if}
 
-        <div class="space-y-1.5">
-          <label for="replicas" class="text-sm font-medium">Replica Count</label>
-          <input
-            id="replicas"
-            type="number"
-            min="0"
-            max="100"
-            required
-            bind:value={targetReplicas}
-            class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </div>
-
-        <div class="flex justify-end gap-3 pt-3 border-t border-border">
+      <!-- Config variables -->
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <div>
+            <span class="text-sm font-medium">Config Variables</span>
+            <p class="text-xs text-muted-foreground">Visible in the ConfigMap. Safe for non-sensitive values.</p>
+          </div>
           <button
             type="button"
-            onclick={() => showScaleModal = false}
-            class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent"
+            onclick={() => (editConfigVars = [...editConfigVars, { key: '', value: '' }])}
+            class="text-xs font-semibold text-primary hover:underline"
           >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            class="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-          >
-            {isSubmitting ? 'Scaling...' : 'Apply Scale'}
+            + Add
           </button>
         </div>
-      </form>
-    </div>
-  </div>
-{/if}
 
-<!-- Delete Confirmation Modal -->
-{#if showDeleteModal && canWrite}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-    <div class="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-lg">
-      <h2 class="text-lg font-semibold text-foreground">Confirm Workload Deletion</h2>
-      <p class="mt-2 text-sm text-muted-foreground">
-        Are you sure you want to delete deployment <span class="font-mono font-semibold text-rose-500">{deploymentToDelete}</span>?
-        All active containers running under this deployment will be terminated. This action is permanent.
+        <div class="space-y-2">
+          {#each editConfigVars as ev, idx}
+            <div class="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="Key"
+                bind:value={ev.key}
+                class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <input
+                type="text"
+                placeholder="Value"
+                bind:value={ev.value}
+                class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <button
+                type="button"
+                onclick={() => (editConfigVars = editConfigVars.filter((_, i) => i !== idx))}
+                aria-label="Remove config variable"
+                class="text-muted-foreground hover:text-destructive p-1"
+              >
+                <X class="h-4 w-4" />
+              </button>
+            </div>
+          {/each}
+          {#if editConfigVars.length === 0}
+            <p class="text-xs text-muted-foreground">No config variables.</p>
+          {/if}
+        </div>
+      </div>
+
+      <!-- Secret variables -->
+      <div class="space-y-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
+        <div class="flex items-center justify-between">
+          <div>
+            <span class="flex items-center gap-1.5 text-sm font-medium">
+              <KeyRound class="h-3.5 w-3.5 text-amber-500" />
+              Secret Variables
+            </span>
+            <p class="text-xs text-muted-foreground">
+              Values are write-only. Leave blank to keep the stored value.
+            </p>
+          </div>
+          <button
+            type="button"
+            onclick={() => (editSecretVars = [...editSecretVars, { key: '', value: '', isExisting: false }])}
+            class="text-xs font-semibold text-primary hover:underline"
+          >
+            + Add
+          </button>
+        </div>
+
+        <div class="space-y-2">
+          {#each editSecretVars as sv, idx}
+            <div class="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="Key"
+                readonly={sv.isExisting}
+                bind:value={sv.key}
+                class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring read-only:opacity-70"
+              />
+              <input
+                type="password"
+                autocomplete="new-password"
+                placeholder={sv.isExisting ? '•••••••• (unchanged)' : 'Value'}
+                bind:value={sv.value}
+                class="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <button
+                type="button"
+                onclick={() => removeSecretRow(idx)}
+                aria-label="Remove secret variable"
+                class="text-muted-foreground hover:text-destructive p-1"
+              >
+                <X class="h-4 w-4" />
+              </button>
+            </div>
+          {/each}
+          {#if editSecretVars.length === 0}
+            <p class="text-xs text-muted-foreground">No secret variables.</p>
+          {/if}
+          {#if removedSecretKeys.length > 0}
+            <p class="text-xs text-destructive">
+              Will delete on save: <span class="font-mono">{removedSecretKeys.join(', ')}</span>
+            </p>
+          {/if}
+        </div>
+      </div>
+
+      <p class="text-xs text-muted-foreground">
+        Saving rolls the pods — containers only read environment variables at start.
       </p>
 
+    </form>
+  {/if}
+
+  {#snippet footer()}
+    <button
+      type="button"
+      onclick={() => { showConfigModal = false; configTarget = null; }}
+      class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent"
+    >
+      Close
+    </button>
+    <button
+      type="submit"
+      form="deployment-config-form"
+      disabled={isSubmitting}
+      class="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+    >
+      {isSubmitting ? 'Saving...' : 'Save & Roll'}
+    </button>
+  {/snippet}
+</Modal>
+
+<!-- Scale Modal -->
+<Modal
+  open={showScaleModal && !!activeDeployment && canWrite}
+  title="Scale Workload"
+  onclose={() => (showScaleModal = false)}
+>
+  {#if activeDeployment}
+    <form id="scale-workload-form" onsubmit={handleScale} class="space-y-4">
       {#if errorMsg}
-        <p class="mt-3 text-sm text-destructive bg-destructive/10 p-3 rounded-md">{errorMsg}</p>
+        <p class="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{errorMsg}</p>
       {/if}
 
-      <div class="mt-6 flex justify-end gap-3">
-        <button
-          type="button"
-          onclick={() => { showDeleteModal = false; deploymentToDelete = ''; }}
-          class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          disabled={isSubmitting}
-          onclick={handleDelete}
-          class="inline-flex h-9 items-center justify-center rounded-md bg-destructive px-4 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
-        >
-          {isSubmitting ? 'Deleting...' : 'Delete Deployment'}
-        </button>
+      <p class="text-sm text-muted-foreground">
+        Scale replicas for deployment <span class="font-mono text-foreground font-semibold">{activeDeployment.name}</span>.
+      </p>
+
+      <div class="space-y-1.5">
+        <label for="replicas" class="text-sm font-medium">Replica Count</label>
+        <input
+          id="replicas"
+          type="number"
+          min="0"
+          max="100"
+          required
+          bind:value={targetReplicas}
+          class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+        />
       </div>
-    </div>
-  </div>
-{/if}
+
+      <div class="space-y-2">
+        <label class="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={scaleAutoscaling.maxReplicas > 1}
+            onchange={(e) => {
+              const on = (e.currentTarget as HTMLInputElement).checked;
+              scaleAutoscaling = on
+                ? { minReplicas: Math.max(targetReplicas, 1), maxReplicas: Math.max(targetReplicas * 3, 4), cpuAverageUtilization: 70, memoryAverageUtilization: 0 }
+                : emptyAutoscaling();
+            }}
+            class="rounded border-input"
+          />
+          Autoscale (HPA)
+        </label>
+        {#if scaleAutoscaling.maxReplicas > 1}
+          <div class="grid grid-cols-3 gap-2">
+            <label class="text-xs">Min
+              <input type="number" min="1" bind:value={scaleAutoscaling.minReplicas}
+                class="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs" />
+            </label>
+            <label class="text-xs">Max
+              <input type="number" min="2" bind:value={scaleAutoscaling.maxReplicas}
+                class="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs" />
+            </label>
+            <label class="text-xs">CPU %
+              <input type="number" min="10" max="100" bind:value={scaleAutoscaling.cpuAverageUtilization}
+                class="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs" />
+            </label>
+          </div>
+        {/if}
+      </div>
+    </form>
+  {/if}
+
+  {#snippet footer()}
+    <button
+      type="button"
+      onclick={() => (showScaleModal = false)}
+      class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent"
+    >
+      Cancel
+    </button>
+    <button
+      type="submit"
+      form="scale-workload-form"
+      disabled={isSubmitting}
+      class="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+    >
+      {isSubmitting ? 'Scaling...' : 'Apply Scale'}
+    </button>
+  {/snippet}
+</Modal>
+
+<!-- Delete Confirmation Modal -->
+<Modal
+  open={showDeleteModal && canWrite}
+  title="Confirm Workload Deletion"
+  onclose={() => { showDeleteModal = false; deploymentToDelete = ''; }}
+>
+  <p class="text-sm text-muted-foreground">
+    Are you sure you want to delete deployment <span class="font-mono font-semibold text-rose-500">{deploymentToDelete}</span>?
+    All active containers running under this deployment will be terminated. This action is permanent.
+  </p>
+
+  {#if errorMsg}
+    <p class="mt-3 text-sm text-destructive bg-destructive/10 p-3 rounded-md">{errorMsg}</p>
+  {/if}
+
+  {#snippet footer()}
+    <button
+      type="button"
+      onclick={() => { showDeleteModal = false; deploymentToDelete = ''; }}
+      class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+    >
+      Cancel
+    </button>
+    <button
+      type="button"
+      disabled={isSubmitting}
+      onclick={handleDelete}
+      class="inline-flex h-9 items-center justify-center rounded-md bg-destructive px-4 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+    >
+      {isSubmitting ? 'Deleting...' : 'Delete Deployment'}
+    </button>
+  {/snippet}
+</Modal>
+
+<Modal
+  open={!!logTarget}
+  title={logTarget ? `Live logs — ${logTarget.namespace}/${logTarget.name}` : 'Live logs'}
+  description="Streaming container output as pods start and run."
+  size="xl"
+  onclose={() => (logTarget = null)}
+>
+  {#if logTarget}
+    {#key `${logTarget.namespace}/${logTarget.name}`}
+      <DeploymentLogPanel namespace={logTarget.namespace} app={logTarget.name} />
+    {/key}
+  {/if}
+</Modal>

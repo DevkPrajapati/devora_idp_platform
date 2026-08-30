@@ -44,6 +44,9 @@ type Server struct {
 	// appAccess holds live port-forwards that must be torn down on shutdown.
 	// Nil when no cluster is connected.
 	appAccess *kubernetes.AppAccess
+	// clusterService owns the background loop that keeps the Kubernetes
+	// connection matched to the active cluster.
+	clusterService *cluster.Service
 }
 
 // New creates a configured HTTP server with all routes and middleware.
@@ -54,6 +57,8 @@ func New(cfg *config.Config, logger *zap.Logger, pool *database.Pool) *Server {
 	if err != nil {
 		logger.Warn("kubernetes client unavailable", zap.Error(err))
 	}
+	hub := kubernetes.NewHub(k8sClient, cfg.Kubernetes)
+	k8sClient = hub.Live()
 
 	validator := auth.NewValidator(auth.ValidatorConfig{
 		Issuer:   cfg.Auth.Issuer,
@@ -95,6 +100,7 @@ func New(cfg *config.Config, logger *zap.Logger, pool *database.Pool) *Server {
 	namespaceRepo := repository.NewNamespaceRepository(pool)
 	projectRepo := repository.NewProjectRepository(pool)
 	registryRepo := repository.NewRegistryRepository(pool)
+	clusterRepo := repository.NewClusterRepository(pool)
 	auditService := audit.NewService(auditRepo)
 	registryService := registry.NewService(
 		registryRepo, projectRepo, namespaceRepo, k8sClient,
@@ -102,7 +108,23 @@ func New(cfg *config.Config, logger *zap.Logger, pool *database.Pool) *Server {
 	)
 	namespaceService := namespace.NewService(namespaceRepo, projectRepo, k8sClient, registryService, auditService)
 	deploymentService := deployment.NewService(k8sClient, namespaceRepo, registryService, auditService)
-	clusterService := cluster.NewService(k8sClient)
+	clusterService := cluster.NewService(k8sClient).WithFleet(cluster.FleetOptions{
+		Hub:         hub,
+		Repo:        clusterRepo,
+		Box:         encryptionBox,
+		Provisioner: kubernetes.NewHostProvisioner(cfg.Kubernetes),
+		Audit:       auditService,
+		Logger:      logger,
+		Config:      cfg.Kubernetes,
+		State:       namespaceRepo,
+	})
+	clusterService.Bootstrap(context.Background())
+	// Keeps the Kubernetes connection matched to reality after startup: picks up
+	// a cluster that was not running yet, and re-resolves the kubeconfig when a
+	// local cluster is restarted onto a new API server port. Without it either
+	// case needed a backend restart to recover.
+	clusterService.StartWatcher()
+	clusterService.StartCapacityWatch()
 	storageService := storage.NewService(k8sClient)
 	dbbrowseService := dbbrowse.NewService(k8sClient)
 
@@ -122,7 +144,7 @@ func New(cfg *config.Config, logger *zap.Logger, pool *database.Pool) *Server {
 	} else if cfg.Auth.Enabled {
 		logger.Warn("keycloak admin provisioning disabled; Add Member will not create login accounts")
 	}
-	projectService := project.NewService(projectRepo, auditService, kcAdmin)
+	projectService := project.NewService(projectRepo, namespaceRepo, k8sClient, auditService, kcAdmin)
 
 	buildRepo := repository.NewBuildRepository(pool)
 	buildService := build.NewService(buildRepo, projectRepo, k8sClient, encryptionBox, auditService, logger,
@@ -210,7 +232,8 @@ func New(cfg *config.Config, logger *zap.Logger, pool *database.Pool) *Server {
 	mux.Handle(PlatformPath, platformHandler(cfg, validator, k8sClient, metricsHistory))
 
 	// Click-to-open: /apps/{namespace}/{name} port-forwards to the workload and
-	// redirects the browser to 127.0.0.1 — no kubectl or /etc/hosts required.
+	// redirects the browser to {ns}--{name}.localhost — no kubectl, no
+	// 127.0.0.1:18xxx, and no /etc/hosts required.
 	//
 	// The ticket signer is the authorization gate. Passing it in is what keeps
 	// this endpoint from being an unauthenticated tunnel into any pod in the
@@ -231,11 +254,16 @@ func New(cfg *config.Config, logger *zap.Logger, pool *database.Pool) *Server {
 	// Metrics wraps Logging so recorded latency includes log serialisation;
 	// Recovery sits innermost so a panic is still counted and logged rather
 	// than escaping as a bare connection reset.
+	appMux := http.Handler(mux)
+	if appAccess != nil {
+		appMux = appAccess.HostHandler(mux)
+	}
+
 	rootHandler := middleware.RequestID(
 		middleware.CORS(cfg.CORS.AllowedOrigins)(
 			middleware.Metrics(
 				middleware.Logging(logger)(
-					middleware.Recovery(logger)(mux),
+					middleware.Recovery(logger)(appMux),
 				),
 			),
 		),
@@ -251,8 +279,8 @@ func New(cfg *config.Config, logger *zap.Logger, pool *database.Pool) *Server {
 	protocols.SetUnencryptedHTTP2(true)
 
 	httpServer := &http.Server{
-		Addr:    cfg.Server.Address,
-		Handler: rootHandler,
+		Addr:      cfg.Server.Address,
+		Handler:   rootHandler,
 		Protocols: protocols,
 		// ReadHeaderTimeout covers slowloris; ReadTimeout is left unset so
 		// Connect server streams (e.g. StreamPodLogs) are not killed mid-tail.
@@ -263,11 +291,12 @@ func New(cfg *config.Config, logger *zap.Logger, pool *database.Pool) *Server {
 	}
 
 	server := &Server{
-		cfg:       cfg,
-		logger:    logger,
-		pool:      pool,
-		http:      httpServer,
-		appAccess: appAccess,
+		cfg:            cfg,
+		logger:         logger,
+		pool:           pool,
+		http:           httpServer,
+		appAccess:      appAccess,
+		clusterService: clusterService,
 	}
 
 	// Samples cluster utilisation into the ring buffer the dashboard reads.
@@ -317,6 +346,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	if s.stopSampler != nil {
 		s.stopSampler()
+	}
+	if s.clusterService != nil {
+		s.clusterService.StopCapacityWatch()
+		s.clusterService.StopWatcher()
 	}
 	// Closes every live port-forward and its reaper goroutine. Without this the
 	// SPDY streams stay open until the process exits.

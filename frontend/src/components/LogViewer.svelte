@@ -1,6 +1,10 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { streamPodLogs, formatLogTimestamp, StreamError, type LogLine } from '$services/logstream';
+  import { streamPodLogs, StreamError, type LogLine } from '$services/logstream';
+  import { getPodLogs } from '$services/cluster';
+  import LogLineRow from '$components/ui/LogLine.svelte';
+  import { liveClock } from '$stores/clock';
+  import { formatAgo, formatClock } from '$lib/log-style';
   import { Play, Pause, Trash2, RefreshCw, AlertCircle, Search } from '@lucide/svelte';
 
   interface Props {
@@ -9,44 +13,39 @@
     pods: string[];
     /** Initially selected pod. */
     podName: string;
+    /** Container to read. Empty selects the pod's first container. */
+    container?: string;
     /** Keep reconnecting while the pod is still starting. */
     retryNotFound?: boolean;
   }
 
-  let { namespace, pods, podName, retryNotFound = false }: Props = $props();
+  interface DisplayLine extends LogLine {
+    receivedAt: number;
+    seq: number;
+  }
 
-  /**
-   * Lines are capped so a chatty container cannot grow the DOM without bound —
-   * a pod logging a few hundred lines a second would otherwise lock the tab up
-   * within minutes.
-   */
+  let { namespace, pods, podName, container = '', retryNotFound = false }: Props = $props();
+
   const MAX_LINES = 5000;
-  /** Backoff between reconnect attempts, in ms. Caps rather than giving up. */
   const RECONNECT_DELAYS = [1000, 2000, 5000, 10000];
 
-  // Seeded from the prop, then owned locally so the in-viewer pod picker can
-  // change it. untrack makes the "initial value only" intent explicit; callers
-  // that need to switch pods from outside remount via {#key}.
   let selectedPod = $state(untrack(() => podName));
-  let lines = $state<LogLine[]>([]);
+  let lines = $state<DisplayLine[]>([]);
   let paused = $state(false);
   let filter = $state('');
   let status = $state<'connecting' | 'streaming' | 'reconnecting' | 'ended' | 'error'>('connecting');
   let errorMsg = $state('');
   let autoScroll = $state(true);
   let pausedCount = $state(0);
+  let seq = 0;
 
   let logEl = $state<HTMLDivElement | null>(null);
   let controller: AbortController | null = null;
-  /**
-   * While paused the stream stays open and lines land here instead of in the
-   * view. Closing it would lose everything written during the pause, which is
-   * usually the exact window the user paused to read about.
-   */
-  let pausedBuffer: LogLine[] = [];
+  let pausedBuffer: DisplayLine[] = [];
+  let pending: DisplayLine[] = [];
+  let flushHandle = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let attempt = 0;
-  /** Guards against a stale stream appending after the pod changed. */
   let generation = 0;
 
   const visibleLines = $derived(
@@ -55,23 +54,44 @@
       : lines.filter((l) => l.message.toLowerCase().includes(filter.toLowerCase())),
   );
 
+  const lastReceivedAt = $derived(lines.length > 0 ? lines[lines.length - 1].receivedAt : 0);
+
+  function toDisplay(line: LogLine): DisplayLine {
+    seq += 1;
+    return {
+      ...line,
+      receivedAt: Date.now(),
+      seq,
+    };
+  }
+
+  function flushPending() {
+    flushHandle = 0;
+    if (pending.length === 0) return;
+    const batch = pending;
+    pending = [];
+    lines.push(...batch);
+    if (lines.length > MAX_LINES) lines.splice(0, lines.length - MAX_LINES);
+  }
+
   function append(line: LogLine) {
+    const row = toDisplay(line);
     if (paused) {
-      pausedBuffer.push(line);
+      pausedBuffer.push(row);
       if (pausedBuffer.length > MAX_LINES) pausedBuffer.shift();
       pausedCount = pausedBuffer.length;
       return;
     }
-    lines.push(line);
-    if (lines.length > MAX_LINES) lines.splice(0, lines.length - MAX_LINES);
+    pending.push(row);
+    if (flushHandle === 0) {
+      flushHandle = requestAnimationFrame(flushPending);
+    }
   }
 
   function scrollToBottom() {
     if (autoScroll && logEl) logEl.scrollTop = logEl.scrollHeight;
   }
 
-  // Re-pins to the bottom whenever new lines render, unless the user has
-  // scrolled up to read something.
   $effect(() => {
     void visibleLines.length;
     scrollToBottom();
@@ -93,40 +113,54 @@
       for await (const line of streamPodLogs({
         namespace,
         podName: selectedPod,
+        container,
         follow: true,
         tailLines: 200,
         signal: controller.signal,
+        onOpen: () => {
+          if (myGeneration !== generation) return;
+          status = 'streaming';
+          attempt = 0;
+        },
       })) {
         if (myGeneration !== generation) return;
-        if (status !== 'streaming') status = 'streaming';
-        // A successful line proves the connection works, so the next drop
-        // starts its backoff from zero again.
+        status = 'streaming';
         attempt = 0;
         append(line);
       }
 
       if (myGeneration !== generation) return;
-      // The server closed cleanly: the container exited. Reconnecting would
-      // spin against a pod that is gone, so stop and say so.
+      if (retryNotFound) {
+        await seedSnapshot(myGeneration);
+        scheduleReconnect(true);
+        return;
+      }
       status = 'ended';
     } catch (err: any) {
       if (myGeneration !== generation) return;
 
       errorMsg = err?.message || 'Log stream failed';
 
-      // A missing pod will not come back unless we're waiting for a build pod
-      // that has not been scheduled yet.
+      if (
+        err instanceof StreamError &&
+        (err.code === 'unauthenticated' || err.code === 'permission_denied')
+      ) {
+        status = 'error';
+        return;
+      }
+
       if (err instanceof StreamError && err.code === 'not_found' && !retryNotFound) {
         status = 'error';
         return;
       }
-      scheduleReconnect();
+      await seedSnapshot(myGeneration);
+      scheduleReconnect(false);
     }
   }
 
-  function scheduleReconnect() {
-    status = 'reconnecting';
-    const delay = RECONNECT_DELAYS[Math.min(attempt, RECONNECT_DELAYS.length - 1)];
+  function scheduleReconnect(keepLive = false) {
+    if (!keepLive) status = 'reconnecting';
+    const delay = keepLive ? 250 : RECONNECT_DELAYS[Math.min(attempt, RECONNECT_DELAYS.length - 1)];
     attempt += 1;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -134,10 +168,24 @@
     }, delay);
   }
 
+  async function seedSnapshot(myGeneration: number) {
+    if (lines.length > 0 || pausedBuffer.length > 0) return;
+    try {
+      const text = await getPodLogs(namespace, selectedPod, 200);
+      if (myGeneration !== generation) return;
+      if (lines.length > 0) return;
+      for (const row of text.split('\n')) {
+        if (row !== '') {
+          append({ podName: selectedPod, timestamp: '', message: row });
+        }
+      }
+    } catch {
+      // Live follow is still retrying; a snapshot miss is not fatal.
+    }
+  }
+
   function resume() {
     paused = false;
-    // Buffered lines are flushed rather than dropped, so a pause reads as a
-    // freeze of the view, not a gap in the logs.
     if (pausedBuffer.length > 0) {
       lines = [...lines, ...pausedBuffer].slice(-MAX_LINES);
       pausedBuffer = [];
@@ -148,7 +196,12 @@
   function clearLines() {
     lines = [];
     pausedBuffer = [];
+    pending = [];
     pausedCount = 0;
+    if (flushHandle) {
+      cancelAnimationFrame(flushHandle);
+      flushHandle = 0;
+    }
   }
 
   function restart() {
@@ -162,27 +215,35 @@
     selectedPod = pod;
     attempt = 0;
     clearLines();
-    connect();
   }
 
   $effect(() => {
-    connect();
+    const ns = namespace;
+    const pod = selectedPod;
+    void ns;
+    void pod;
+    untrack(() => {
+      connect();
+    });
     return () => {
       generation += 1;
       controller?.abort();
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (flushHandle) {
+        cancelAnimationFrame(flushHandle);
+        flushPending();
+      }
     };
   });
 </script>
 
 <div class="flex flex-col gap-3">
-  <!-- Controls -->
   <div class="flex flex-wrap items-center gap-2">
     {#if pods.length > 1}
       <select
         value={selectedPod}
         onchange={(e) => selectPod((e.currentTarget as HTMLSelectElement).value)}
-        class="h-8 rounded-md border border-input bg-background px-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring"
+        class="h-8 rounded-md border border-input bg-background px-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-ring"
       >
         {#each pods as pod}
           <option value={pod}>{pod}</option>
@@ -198,7 +259,7 @@
         type="text"
         placeholder="Filter lines..."
         bind:value={filter}
-        class="h-8 w-44 rounded-md border border-input bg-background pl-7 pr-2 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+        class="h-8 w-40 rounded-md border border-input bg-background pl-7 pr-2 text-xs focus:outline-none focus:ring-2 focus:ring-ring md:w-52"
       />
     </div>
 
@@ -234,63 +295,69 @@
       Reconnect
     </button>
 
-    <div class="ml-auto flex items-center gap-1.5 text-xs">
-      <span
-        class="h-2 w-2 rounded-full {status === 'streaming'
-          ? 'bg-emerald-500 animate-pulse'
-          : status === 'error'
-            ? 'bg-destructive'
-            : status === 'ended'
-              ? 'bg-muted-foreground'
-              : 'bg-amber-500 animate-pulse'}"
-      ></span>
-      <span class="text-muted-foreground">
-        {#if status === 'streaming'}
-          {paused ? 'streaming (paused)' : 'live'}
-        {:else if status === 'reconnecting'}
-          reconnecting...
-        {:else if status === 'ended'}
-          container exited
-        {:else if status === 'error'}
-          disconnected
-        {:else}
-          connecting...
-        {/if}
-      </span>
+    <div class="ml-auto flex flex-wrap items-center gap-3 text-xs">
+      <span class="tabular-nums text-muted-foreground">{formatClock($liveClock)}</span>
+      <div class="flex items-center gap-1.5">
+        <span
+          class="live-dot {status === 'streaming'
+            ? 'text-emerald-500'
+            : status === 'error'
+              ? 'text-destructive'
+              : status === 'ended'
+                ? 'text-muted-foreground'
+                : 'text-amber-500'}"
+        ></span>
+        <span class="text-muted-foreground">
+          {#if status === 'streaming'}
+            {paused ? 'streaming (paused)' : 'live'}
+            {#if lastReceivedAt}
+              · {formatAgo(lastReceivedAt, $liveClock)}
+            {/if}
+          {:else if status === 'reconnecting'}
+            reconnecting...
+          {:else if status === 'ended'}
+            container exited
+          {:else if status === 'error'}
+            disconnected
+          {:else}
+            connecting...
+          {/if}
+        </span>
+      </div>
     </div>
   </div>
 
-  {#if errorMsg && status === 'error'}
+  {#if errorMsg && (status === 'error' || status === 'reconnecting')}
     <p class="flex items-start gap-2 rounded-md bg-destructive/10 p-2.5 text-xs text-destructive">
       <AlertCircle class="mt-0.5 h-3.5 w-3.5 shrink-0" />
       <span>{errorMsg}</span>
     </p>
   {/if}
 
-  <!-- Log surface -->
   <div
     bind:this={logEl}
     onscroll={onScroll}
-    class="h-[50vh] overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs leading-relaxed text-zinc-300"
+    class="log-surface log-console overflow-y-auto rounded-lg border p-2 font-mono text-xs leading-relaxed"
   >
     {#if visibleLines.length === 0}
-      <p class="text-zinc-500">
+      <p class="px-1 py-2 text-zinc-500">
         {#if filter.trim() !== '' && lines.length > 0}
           No lines match "{filter}".
         {:else if status === 'connecting'}
           Connecting to {selectedPod}...
+        {:else if status === 'reconnecting'}
+          Waiting for container output from {selectedPod}...
         {:else}
           No output yet.
         {/if}
       </p>
     {:else}
-      {#each visibleLines as line, i (i)}
-        <div class="flex gap-2 hover:bg-zinc-900/60">
-          {#if line.timestamp}
-            <span class="shrink-0 select-none text-zinc-600">{formatLogTimestamp(line.timestamp)}</span>
-          {/if}
-          <span class="whitespace-pre-wrap break-all">{line.message}</span>
-        </div>
+      {#each visibleLines as line (line.seq)}
+        <LogLineRow
+          timestamp={line.timestamp}
+          receivedAt={line.receivedAt}
+          message={line.message}
+        />
       {/each}
     {/if}
   </div>
@@ -300,12 +367,13 @@
       {visibleLines.length} line{visibleLines.length === 1 ? '' : 's'}
       {#if filter.trim() !== ''}(filtered from {lines.length}){/if}
       {#if lines.length >= MAX_LINES}· oldest trimmed at {MAX_LINES}{/if}
+      · updates live
     </span>
     {#if !autoScroll}
       <button
         type="button"
         onclick={() => { autoScroll = true; scrollToBottom(); }}
-        class="font-medium text-primary hover:underline"
+        class="font-medium text-foreground hover:underline"
       >
         Jump to latest
       </button>

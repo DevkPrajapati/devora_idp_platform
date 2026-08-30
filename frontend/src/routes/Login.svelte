@@ -1,7 +1,19 @@
 <script lang="ts">
+  import Logo from '$components/Logo.svelte';
+  import ThemeToggle from '$components/ThemeToggle.svelte';
   import { auth } from '$stores/auth';
   import { router } from '$stores/router';
-  import { Eye, EyeOff, LoaderCircle, ArrowRight, AlertCircle } from '@lucide/svelte';
+  import {
+    Eye,
+    EyeOff,
+    LoaderCircle,
+    ArrowRight,
+    AlertCircle,
+    Network,
+    Container,
+    Shield,
+    Lock,
+  } from '@lucide/svelte';
 
   let username = $state('');
   let password = $state('');
@@ -16,8 +28,18 @@
     isSubmitting = true;
     errorMsg = '';
 
+    // Read from the form, not only bind:value. Chrome autofill can paint a
+    // username/password without firing input events, so Svelte state stays empty
+    // and Keycloak returns "Invalid user credentials".
+    const form = e.currentTarget as HTMLFormElement;
+    const data = new FormData(form);
+    const user = String(data.get('username') ?? username).trim();
+    const pass = String(data.get('password') ?? password);
+    username = user;
+    password = pass;
+
     try {
-      await auth.login(username, password);
+      await auth.login(user, pass);
       router.navigate('/');
     } catch (err: unknown) {
       errorMsg = err instanceof Error ? err.message : 'Sign-in failed. Check your credentials.';
@@ -33,266 +55,363 @@
 </script>
 
 <div class="login-root">
-  <div class="login-atmosphere" aria-hidden="true">
-    <div class="login-grid"></div>
-    <div class="login-glow login-glow-a"></div>
-    <div class="login-glow login-glow-b"></div>
-    <div class="login-orbit"></div>
-  </div>
-
-  <main class="login-main">
-    <div class="login-brand animate-in">
-      <div class="login-mark" aria-hidden="true">
-        <svg viewBox="0 0 40 40" class="login-mark-svg">
-          <rect x="4" y="4" width="32" height="32" rx="8" fill="currentColor" opacity="0.12" />
-          <path
-            d="M12 26V14h5.2c3.1 0 5 1.6 5 4.1 0 1.6-.8 2.9-2.2 3.5L24.8 26h-3.4l-4.2-4.1H15V26H12Zm3-6.8h2c1.5 0 2.3-.7 2.3-1.8S18.5 15.6 17 15.6h-2v3.6Z"
-            fill="currentColor"
-          />
-          <path d="M27 14h3v12h-3V14Z" fill="currentColor" opacity="0.85" />
-        </svg>
-      </div>
-      <h1 class="login-title">IDP</h1>
-      <p class="login-tagline">Internal Developer Platform</p>
+  <aside class="login-showcase">
+    <div class="login-showcase-bg" aria-hidden="true">
+      <div class="login-showcase-grid"></div>
+      <div class="login-showcase-glow login-showcase-glow-a"></div>
+      <div class="login-showcase-glow login-showcase-glow-b"></div>
     </div>
 
-    <section class="login-panel animate-in delay-1">
-      {#if !authEnabled}
-        <div class="login-dev">
-          <p class="login-dev-copy">Authentication is off in this environment.</p>
-          <button type="button" class="login-submit" onclick={handleDevContinue}>
-            Continue to console
-            <ArrowRight class="h-4 w-4" />
-          </button>
-        </div>
-      {:else}
-        <header class="login-panel-head">
-          <h2 class="login-panel-title">Sign in</h2>
-          <p class="login-panel-sub">Use your platform account to access the console.</p>
-        </header>
+    <div class="login-showcase-inner">
+      <h1 class="sr-only">DEVORA</h1>
+      <Logo variant="lockup" size="xl" />
+      <p class="login-kicker">Internal developer platform</p>
+      <p class="login-headline">Infrastructure, without the wait.</p>
+      <p class="login-lede">
+        Provision clusters, ship workloads, and control access from one console — no ticket queue.
+      </p>
 
-        <form class="login-form" onsubmit={handleLogin}>
-          {#if errorMsg}
-            <div class="login-error" role="alert">
-              <AlertCircle class="h-4 w-4 shrink-0 mt-0.5" />
-              <p>{errorMsg}</p>
-            </div>
-          {/if}
+      <ul class="login-points">
+        <li>
+          <span class="login-point-icon"><Network class="h-4 w-4" /></span>
+          <span>
+            <strong>Clusters</strong>
+            <span>Connect the fleet and watch live capacity</span>
+          </span>
+        </li>
+        <li>
+          <span class="login-point-icon"><Container class="h-4 w-4" /></span>
+          <span>
+            <strong>Deploy</strong>
+            <span>Builds, rollouts, and services in one place</span>
+          </span>
+        </li>
+        <li>
+          <span class="login-point-icon"><Shield class="h-4 w-4" /></span>
+          <span>
+            <strong>Control</strong>
+            <span>Namespaces, RBAC, and a full audit trail</span>
+          </span>
+        </li>
+      </ul>
+    </div>
 
-          <div class="login-field">
-            <label for="username">Username</label>
-            <input
-              id="username"
-              type="text"
-              required
-              autocomplete="username"
-              placeholder="Enter username"
-              bind:value={username}
-              disabled={isSubmitting}
-            />
+    <p class="login-showcase-foot">DEVORA · Self-service developer infrastructure</p>
+  </aside>
+
+  <main class="login-stage">
+    <div class="login-stage-bar">
+      <div class="login-stage-brand">
+        <Logo variant="lockup" size="sm" />
+      </div>
+      <ThemeToggle />
+    </div>
+
+    <div class="login-stage-body">
+      <section class="login-panel">
+        {#if !authEnabled}
+          <div class="login-dev">
+            <p class="login-dev-copy">Authentication is off in this environment.</p>
+            <button type="button" class="login-submit" onclick={handleDevContinue}>
+              Continue to console
+              <ArrowRight class="h-4 w-4" />
+            </button>
           </div>
+        {:else}
+          <header class="login-panel-head">
+            <h2 class="login-panel-title">Sign in</h2>
+            <p class="login-panel-sub">Use your platform account to access the console.</p>
+          </header>
 
-          <div class="login-field">
-            <label for="password">Password</label>
-            <div class="login-password">
+          <form class="login-form" onsubmit={handleLogin}>
+            {#if errorMsg}
+              <div class="login-error" role="alert">
+                <AlertCircle class="h-4 w-4 shrink-0 mt-0.5" />
+                <p>{errorMsg}</p>
+              </div>
+            {/if}
+
+            <div class="login-field">
+              <label for="username">Username</label>
               <input
-                id="password"
-                type={showPassword ? 'text' : 'password'}
+                id="username"
+                name="username"
+                type="text"
                 required
-                autocomplete="current-password"
-                placeholder="Enter password"
-                bind:value={password}
+                autocomplete="username"
+                placeholder="Enter username"
+                bind:value={username}
                 disabled={isSubmitting}
               />
-              <button
-                type="button"
-                class="login-eye"
-                onclick={() => (showPassword = !showPassword)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-                tabindex="-1"
-              >
-                {#if showPassword}
-                  <EyeOff class="h-4 w-4" />
-                {:else}
-                  <Eye class="h-4 w-4" />
-                {/if}
-              </button>
             </div>
-          </div>
 
-          <button type="submit" class="login-submit" disabled={isSubmitting}>
-            {#if isSubmitting}
-              <LoaderCircle class="h-4 w-4 animate-spin" />
-              Signing in…
-            {:else}
-              Sign in
-              <ArrowRight class="h-4 w-4 login-submit-arrow" />
-            {/if}
-          </button>
-        </form>
-      {/if}
-    </section>
+            <div class="login-field">
+              <label for="password">Password</label>
+              <div class="login-password">
+                <input
+                  id="password"
+                  name="password"
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  autocomplete="current-password"
+                  placeholder="Enter password"
+                  bind:value={password}
+                  disabled={isSubmitting}
+                />
+                <button
+                  type="button"
+                  class="login-eye"
+                  onclick={() => (showPassword = !showPassword)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  tabindex="-1"
+                >
+                  {#if showPassword}
+                    <EyeOff class="h-4 w-4" />
+                  {:else}
+                    <Eye class="h-4 w-4" />
+                  {/if}
+                </button>
+              </div>
+            </div>
 
-    <p class="login-foot animate-in delay-2">Secure access · Platform credentials only</p>
+            <button type="submit" class="login-submit" disabled={isSubmitting}>
+              {#if isSubmitting}
+                <LoaderCircle class="h-4 w-4 animate-spin" />
+                Signing in…
+              {:else}
+                Sign in
+                <span class="login-submit-arrow">
+                  <ArrowRight class="h-4 w-4" />
+                </span>
+              {/if}
+            </button>
+          </form>
+        {/if}
+      </section>
+
+      <p class="login-foot">
+        <Lock class="h-3 w-3" />
+        Secure access · Platform credentials only
+      </p>
+    </div>
   </main>
 </div>
 
 <style>
   .login-root {
-    position: relative;
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2rem 1.25rem;
-    overflow: hidden;
-    color: #e8ecef;
-    background: #0a1210;
+    display: grid;
+    grid-template-columns: minmax(0, 1.08fr) minmax(26rem, 0.92fr);
+    min-height: 100dvh;
+    background: var(--bg);
+    color: var(--fg);
   }
 
-  .login-atmosphere {
+  .login-showcase {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 3rem 3.25rem 2rem;
+    color: #fafafa;
+    background: #050505;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .login-showcase-bg {
     position: absolute;
     inset: 0;
     pointer-events: none;
   }
 
-  .login-grid {
+  .login-showcase-grid {
     position: absolute;
     inset: 0;
     background-image:
-      linear-gradient(rgba(16, 185, 129, 0.06) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(16, 185, 129, 0.06) 1px, transparent 1px);
-    background-size: 48px 48px;
-    mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, black 20%, transparent 75%);
-    animation: grid-drift 28s linear infinite;
+      linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(ellipse 80% 70% at 40% 45%, black 10%, transparent 72%);
   }
 
-  .login-glow {
+  .login-showcase-glow {
     position: absolute;
     border-radius: 9999px;
     filter: blur(80px);
+    opacity: 0.55;
   }
 
-  .login-glow-a {
-    width: 42vw;
-    height: 42vw;
-    max-width: 520px;
-    max-height: 520px;
-    top: -12%;
-    left: 50%;
-    transform: translateX(-60%);
-    background: rgba(16, 185, 129, 0.22);
-    animation: glow-pulse 8s ease-in-out infinite;
+  .login-showcase-glow-a {
+    width: 22rem;
+    height: 22rem;
+    left: -6rem;
+    top: -4rem;
+    background: rgba(34, 211, 238, 0.16);
   }
 
-  .login-glow-b {
-    width: 36vw;
-    height: 36vw;
-    max-width: 420px;
-    max-height: 420px;
-    bottom: -18%;
-    right: 8%;
-    background: rgba(6, 95, 70, 0.35);
-    animation: glow-pulse 10s ease-in-out infinite reverse;
+  .login-showcase-glow-b {
+    width: 24rem;
+    height: 24rem;
+    right: -8rem;
+    bottom: 10%;
+    background: rgba(168, 85, 247, 0.14);
   }
 
-  .login-orbit {
-    position: absolute;
-    width: min(720px, 90vw);
-    height: min(720px, 90vw);
-    left: 50%;
-    top: 42%;
-    transform: translate(-50%, -50%);
-    border: 1px solid rgba(16, 185, 129, 0.1);
-    border-radius: 9999px;
-    animation: orbit-spin 48s linear infinite;
-  }
-
-  .login-orbit::after {
-    content: '';
-    position: absolute;
-    width: 8px;
-    height: 8px;
-    border-radius: 9999px;
-    background: #34d399;
-    top: 8%;
-    left: 50%;
-    box-shadow: 0 0 16px rgba(52, 211, 153, 0.8);
-  }
-
-  .login-main {
+  .login-showcase-inner {
     position: relative;
     z-index: 1;
+    max-width: 32rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    margin: auto 0;
+    animation: rise-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .login-showcase-foot {
+    position: relative;
+    z-index: 1;
+    margin: 2rem 0 0;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(250, 250, 250, 0.32);
+  }
+
+  .login-kicker {
+    margin: 1.35rem 0 0;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: rgba(250, 250, 250, 0.48);
+  }
+
+  .login-headline {
+    margin: 0.7rem 0 0;
+    font-size: clamp(1.85rem, 3.2vw, 2.55rem);
+    font-weight: 700;
+    letter-spacing: -0.04em;
+    line-height: 1.12;
+    color: #fafafa;
+  }
+
+  .login-lede {
+    margin: 0.9rem 0 0;
+    max-width: 28rem;
+    font-size: 0.98rem;
+    line-height: 1.55;
+    color: rgba(250, 250, 250, 0.58);
+  }
+
+  .login-points {
+    list-style: none;
+    margin: 2rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
     width: 100%;
-    max-width: 420px;
+    max-width: 26rem;
+  }
+
+  .login-points li {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.8rem;
+  }
+
+  .login-point-icon {
+    display: inline-flex;
+    height: 2.1rem;
+    width: 2.1rem;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.55rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.04);
+    color: #67e8f9;
+  }
+
+  .login-points strong {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #fafafa;
+  }
+
+  .login-points li span span {
+    display: block;
+    margin-top: 0.12rem;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: rgba(250, 250, 250, 0.48);
+  }
+
+  .login-stage {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--bg);
+  }
+
+  .login-stage-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.25rem 0;
+  }
+
+  .login-stage-brand {
+    display: none;
+    color: var(--fg);
+  }
+
+  .login-stage-bar :global(button) {
+    margin-left: auto;
+  }
+
+  .login-stage-body {
+    flex: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1.75rem;
-  }
-
-  .login-brand {
-    text-align: center;
-  }
-
-  .login-mark {
-    display: inline-flex;
-    color: #34d399;
-    margin-bottom: 0.85rem;
-  }
-
-  .login-mark-svg {
-    width: 3.25rem;
-    height: 3.25rem;
-  }
-
-  .login-title {
-    margin: 0;
-    font-size: clamp(2.75rem, 8vw, 3.75rem);
-    font-weight: 700;
-    letter-spacing: -0.06em;
-    line-height: 1;
-    color: #f4faf7;
-  }
-
-  .login-tagline {
-    margin: 0.55rem 0 0;
-    font-size: 0.95rem;
-    letter-spacing: 0.04em;
-    color: rgba(167, 198, 184, 0.85);
+    justify-content: center;
+    padding: 1.5rem 1.75rem 2.25rem;
   }
 
   .login-panel {
     width: 100%;
-    padding: 1.75rem 1.5rem 1.5rem;
-    border-radius: 1rem;
-    border: 1px solid rgba(52, 211, 153, 0.14);
-    background: linear-gradient(180deg, rgba(17, 28, 24, 0.92), rgba(10, 18, 16, 0.88));
-    backdrop-filter: blur(12px);
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+    max-width: 24rem;
+    animation: rise-in 0.65s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both;
   }
 
   .login-panel-head {
-    margin-bottom: 1.35rem;
+    margin-bottom: 1.5rem;
   }
 
   .login-panel-title {
     margin: 0;
-    font-size: 1.15rem;
+    font-size: 1.5rem;
     font-weight: 600;
-    color: #f0f7f3;
+    letter-spacing: -0.03em;
+    color: var(--fg);
   }
 
   .login-panel-sub {
-    margin: 0.35rem 0 0;
-    font-size: 0.875rem;
-    color: rgba(148, 173, 162, 0.95);
+    margin: 0.4rem 0 0;
+    font-size: 0.9rem;
+    line-height: 1.45;
+    color: var(--muted-fg);
+    overflow-wrap: break-word;
   }
 
   .login-form {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 1.05rem;
   }
 
   .login-field {
@@ -302,27 +421,25 @@
   }
 
   .login-field label {
-    font-size: 0.75rem;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: rgba(148, 173, 162, 0.95);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--fg);
   }
 
   .login-field input,
   .login-password input {
     width: 100%;
-    border-radius: 0.65rem;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(5, 12, 10, 0.65);
-    color: #f4faf7;
-    padding: 0.7rem 0.85rem;
-    font-size: 0.95rem;
+    height: 2.75rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg);
+    padding: 0 0.85rem;
+    font-size: 0.9375rem;
     outline: none;
     transition:
-      border-color 0.2s ease,
-      box-shadow 0.2s ease,
-      background 0.2s ease;
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
   }
 
   .login-password input {
@@ -331,14 +448,29 @@
 
   .login-field input::placeholder,
   .login-password input::placeholder {
-    color: rgba(100, 120, 112, 0.9);
+    color: var(--muted-fg);
+    opacity: 0.75;
   }
 
   .login-field input:focus,
   .login-password input:focus {
-    border-color: rgba(52, 211, 153, 0.55);
-    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
-    background: rgba(5, 12, 10, 0.9);
+    border-color: var(--ring);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 16%, transparent);
+  }
+
+  /* Chrome paints autofill with a light fill + black text, which hides the
+     value on a dark form and used to look like the field was empty/wrong. */
+  .login-field input:-webkit-autofill,
+  .login-field input:-webkit-autofill:hover,
+  .login-field input:-webkit-autofill:focus,
+  .login-password input:-webkit-autofill,
+  .login-password input:-webkit-autofill:hover,
+  .login-password input:-webkit-autofill:focus {
+    -webkit-text-fill-color: var(--fg);
+    caret-color: var(--fg);
+    box-shadow: 0 0 0 1000px var(--bg) inset;
+    border-color: var(--border);
+    transition: background-color 99999s ease-out 0s;
   }
 
   .login-field input:disabled,
@@ -352,7 +484,7 @@
 
   .login-eye {
     position: absolute;
-    right: 0.55rem;
+    right: 0.4rem;
     top: 50%;
     transform: translateY(-50%);
     display: inline-flex;
@@ -361,14 +493,14 @@
     padding: 0.35rem;
     border: 0;
     background: transparent;
-    color: rgba(148, 173, 162, 0.95);
+    color: var(--muted-fg);
     cursor: pointer;
     border-radius: 0.4rem;
   }
 
   .login-eye:hover {
-    color: #d1fae5;
-    background: rgba(255, 255, 255, 0.04);
+    color: var(--fg);
+    background: var(--accent);
   }
 
   .login-error {
@@ -376,42 +508,45 @@
     gap: 0.55rem;
     align-items: flex-start;
     padding: 0.75rem 0.85rem;
-    border-radius: 0.65rem;
-    border: 1px solid rgba(244, 63, 94, 0.28);
-    background: rgba(127, 29, 29, 0.28);
-    color: #fecdd3;
+    border-radius: 0.5rem;
+    border: 1px solid color-mix(in oklab, var(--destructive) 40%, var(--border));
+    background: color-mix(in oklab, var(--destructive) 10%, var(--bg));
+    color: var(--destructive);
     font-size: 0.82rem;
     line-height: 1.4;
   }
 
+  .login-error p {
+    margin: 0;
+  }
+
   .login-submit {
-    margin-top: 0.35rem;
+    margin-top: 0.25rem;
     display: inline-flex;
     width: 100%;
+    height: 2.75rem;
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
     border: 0;
-    border-radius: 0.65rem;
-    padding: 0.8rem 1rem;
-    font-size: 0.95rem;
+    border-radius: 0.5rem;
+    padding: 0 1rem;
+    font-size: 0.9375rem;
     font-weight: 600;
-    color: #042f1e;
-    background: linear-gradient(180deg, #34d399 0%, #10b981 100%);
+    color: var(--primary-fg);
+    background: var(--primary);
     cursor: pointer;
     transition:
-      transform 0.18s ease,
-      filter 0.18s ease,
-      opacity 0.18s ease;
+      opacity 0.15s ease,
+      transform 0.15s ease;
   }
 
   .login-submit:hover:not(:disabled) {
-    filter: brightness(1.05);
-    transform: translateY(-1px);
+    opacity: 0.92;
   }
 
   .login-submit:active:not(:disabled) {
-    transform: translateY(0);
+    transform: translateY(1px);
   }
 
   .login-submit:disabled {
@@ -419,49 +554,47 @@
     cursor: not-allowed;
   }
 
+  .login-submit:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
   .login-submit:hover:not(:disabled) .login-submit-arrow {
     transform: translateX(3px);
   }
 
   .login-submit-arrow {
+    display: inline-flex;
     transition: transform 0.18s ease;
   }
 
   .login-dev {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 1.15rem;
   }
 
   .login-dev-copy {
     margin: 0;
-    font-size: 0.9rem;
-    color: rgba(167, 198, 184, 0.9);
+    font-size: 0.95rem;
+    line-height: 1.5;
+    color: var(--muted-fg);
   }
 
   .login-foot {
-    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 1.75rem 0 0;
     font-size: 0.75rem;
-    letter-spacing: 0.04em;
-    color: rgba(120, 145, 134, 0.85);
-  }
-
-  .animate-in {
-    animation: rise-in 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  .delay-1 {
-    animation-delay: 0.12s;
-  }
-
-  .delay-2 {
-    animation-delay: 0.22s;
+    letter-spacing: 0.01em;
+    color: var(--muted-fg);
   }
 
   @keyframes rise-in {
     from {
       opacity: 0;
-      transform: translateY(14px);
+      transform: translateY(12px);
     }
     to {
       opacity: 1;
@@ -469,57 +602,44 @@
     }
   }
 
-  @keyframes glow-pulse {
-    0%,
-    100% {
-      opacity: 0.7;
-      transform: translateX(-60%) scale(1);
+  @media (max-height: 740px) {
+    .login-points {
+      margin-top: 1.25rem;
     }
-    50% {
-      opacity: 1;
-      transform: translateX(-60%) scale(1.06);
+
+    .login-showcase {
+      padding-top: 2rem;
+      padding-bottom: 1.25rem;
     }
   }
 
-  .login-glow-b {
-    animation-name: glow-pulse-b;
-  }
+  @media (max-width: 959px) {
+    .login-root {
+      grid-template-columns: 1fr;
+    }
 
-  @keyframes glow-pulse-b {
-    0%,
-    100% {
-      opacity: 0.55;
-      transform: scale(1);
+    .login-showcase {
+      display: none;
     }
-    50% {
-      opacity: 0.9;
-      transform: scale(1.08);
-    }
-  }
 
-  @keyframes grid-drift {
-    from {
-      background-position: 0 0;
+    .login-stage-brand {
+      display: flex;
     }
-    to {
-      background-position: 48px 48px;
-    }
-  }
 
-  @keyframes orbit-spin {
-    from {
-      transform: translate(-50%, -50%) rotate(0deg);
+    .login-stage-bar {
+      padding: 1rem 1.15rem 0;
     }
-    to {
-      transform: translate(-50%, -50%) rotate(360deg);
+
+    .login-stage-body {
+      padding: 1.25rem 1.25rem 2rem;
+      justify-content: flex-start;
+      padding-top: 12vh;
     }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .login-grid,
-    .login-glow,
-    .login-orbit,
-    .animate-in {
+    .login-showcase-inner,
+    .login-panel {
       animation: none !important;
     }
   }

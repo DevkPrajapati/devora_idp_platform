@@ -8,11 +8,13 @@
   import { getPlatformInfo } from '$services/platform';
   import { createQuery } from '@tanstack/svelte-query';
   import { Cpu, Database, HardDrive, RefreshCw, BarChart2, CheckCircle, Activity } from '@lucide/svelte';
+  import PageHeader from '$components/ui/PageHeader.svelte';
+  import { meterBarClass } from '$lib/status';
 
   const overviewQuery = createQuery(() => ({
     queryKey: ['cluster-overview'],
     queryFn: getOverview,
-    refetchInterval: 10000,
+    refetchInterval: 20000,
   }));
 
   // Real sampled history from the backend ring buffer. These were three
@@ -41,9 +43,9 @@
   // The headline percentages and the "X cores out of Y" captions were also
   // hardcoded (45% / 32% / 19%). All three have real sources.
   const metricsQuery = createQuery(() => ({
-    queryKey: ['resource-metrics'],
+    queryKey: ['cluster-resource-metrics'],
     queryFn: getResourceMetrics,
-    refetchInterval: 15000,
+    refetchInterval: 20000,
   }));
 
   const storageQuery = createQuery(() => ({
@@ -67,14 +69,11 @@
   }
 </script>
 
-<div class="space-y-6">
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Monitoring & Metrics</h1>
-      <p class="mt-1 text-sm text-muted-foreground">
-        Real-time telemetry, resource trends, allocation metrics, and node conditions.
-      </p>
-    </div>
+<div class="page-stack">
+  <PageHeader
+    title="Monitoring & Metrics"
+    description="Real-time telemetry, resource trends, allocation metrics, and node conditions."
+  >
     <button
       onclick={() => overviewQuery.refetch()}
       class="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent text-muted-foreground"
@@ -82,14 +81,14 @@
       <RefreshCw class="mr-2 h-4 w-4" />
       Refresh
     </button>
-  </div>
+  </PageHeader>
 
   <!-- Main System Load Metrics -->
   <div class="grid gap-4 md:grid-cols-3">
     <!-- CPU -->
     <Card>
       <CardHeader>
-        <div class="flex items-center gap-2 text-primary">
+        <div class="flex items-center gap-2 text-emerald-500">
           <Cpu class="h-5 w-5" />
           <CardTitle class="text-sm font-semibold text-foreground">CPU Utilization</CardTitle>
         </div>
@@ -104,7 +103,7 @@
         <div class="flex h-12 items-end gap-1.5 pt-2">
           {#each cpuHistory as val}
             <div
-              class="w-full rounded-t bg-primary/20 transition-colors hover:bg-primary"
+              class="w-full rounded-t {meterBarClass(val)} opacity-80 transition-colors hover:opacity-100"
               style="height: {Math.max(val, 2)}%"
               title="CPU {val}%"
             ></div>
@@ -139,7 +138,7 @@
         <div class="flex h-12 items-end gap-1.5 pt-2">
           {#each memoryHistory as val}
             <div
-              class="w-full rounded-t bg-indigo-500/20 transition-colors hover:bg-indigo-500"
+              class="w-full rounded-t {meterBarClass(val)} opacity-80 transition-colors hover:opacity-100"
               style="height: {Math.max(val, 2)}%"
               title="Memory {val}%"
             ></div>
@@ -173,9 +172,9 @@
              that was never recorded, which is what the old constant array did.
              A single meter states the same fact honestly. -->
         <div class="pt-2">
-          <div class="h-2 w-full overflow-hidden rounded-full bg-amber-500/15">
+          <div class="h-2 w-full overflow-hidden rounded-full bg-muted">
             <div
-              class="h-full rounded-full bg-amber-500 transition-all"
+              class="h-full rounded-full {meterBarClass(storagePercent ?? 0)} transition-all"
               style="width: {storagePercent ?? 0}%"
             ></div>
           </div>

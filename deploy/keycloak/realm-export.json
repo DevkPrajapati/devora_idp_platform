@@ -9,73 +9,6 @@
   "resetPasswordAllowed": true,
   "editUsernameAllowed": false,
   "bruteForceProtected": true,
-  "attributes": {
-    "userProfileEnabled": ["true"]
-  },
-  "userProfile": {
-    "attributes": [
-      {
-        "name": "username",
-        "displayName": "${username}",
-        "validations": {
-          "length": { "min": 3, "max": 255 },
-          "username-prohibited-characters": {},
-          "up-username-not-idn-homograph": {}
-        },
-        "permissions": {
-          "view": ["admin", "user"],
-          "edit": ["admin", "user"]
-        },
-        "multivalued": false
-      },
-      {
-        "name": "email",
-        "displayName": "${email}",
-        "validations": {
-          "email": {},
-          "length": { "max": 255 }
-        },
-        "permissions": {
-          "view": ["admin", "user"],
-          "edit": ["admin", "user"]
-        },
-        "multivalued": false
-      },
-      {
-        "name": "firstName",
-        "displayName": "${firstName}",
-        "validations": {
-          "length": { "max": 255 },
-          "person-name-prohibited-characters": {}
-        },
-        "permissions": {
-          "view": ["admin", "user"],
-          "edit": ["admin", "user"]
-        },
-        "multivalued": false
-      },
-      {
-        "name": "lastName",
-        "displayName": "${lastName}",
-        "validations": {
-          "length": { "max": 255 },
-          "person-name-prohibited-characters": {}
-        },
-        "permissions": {
-          "view": ["admin", "user"],
-          "edit": ["admin", "user"]
-        },
-        "multivalued": false
-      }
-    ],
-    "groups": [
-      {
-        "name": "user-metadata",
-        "displayHeader": "User metadata",
-        "displayDescription": "Attributes, which refer to user metadata"
-      }
-    ]
-  },
   "accessTokenLifespan": 43200,
   "accessTokenLifespanForImplicitFlow": 43200,
   "ssoSessionIdleTimeout": 43200,
@@ -109,11 +42,15 @@
       "implicitFlowEnabled": false,
       "redirectUris": [
         "http://localhost:5173/*",
-        "http://localhost:4173/*"
+        "http://localhost:4173/*",
+        "http://127.0.0.1:5173/*",
+        "http://127.0.0.1:4173/*"
       ],
       "webOrigins": [
         "http://localhost:5173",
-        "http://localhost:4173"
+        "http://localhost:4173",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:4173"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256"

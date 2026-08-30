@@ -103,8 +103,8 @@
     >
       <defs>
         <linearGradient id="idp-area-fill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.28" />
-          <stop offset="100%" stop-color="var(--primary)" stop-opacity="0.02" />
+          <stop offset="0%" stop-color="var(--chart)" stop-opacity="0.32" />
+          <stop offset="100%" stop-color="var(--chart)" stop-opacity="0.02" />
         </linearGradient>
       </defs>
 
@@ -132,7 +132,7 @@
       <path
         d={linePath}
         fill="none"
-        stroke="var(--primary)"
+        stroke="var(--chart)"
         stroke-width="2"
         stroke-linejoin="round"
         stroke-linecap="round"
@@ -153,7 +153,7 @@
           cx={points[points.length - 1].x}
           cy={points[points.length - 1].y}
           r="4"
-          fill="var(--primary)"
+          fill="var(--chart)"
           stroke="var(--card)"
           stroke-width="2"
         />
@@ -172,7 +172,7 @@
           cx={active.x}
           cy={active.y}
           r="4.5"
-          fill="var(--primary)"
+          fill="var(--chart)"
           stroke="var(--card)"
           stroke-width="2"
         />

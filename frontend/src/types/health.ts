@@ -33,12 +33,12 @@ export function healthStatusLabel(status: HealthStatus): string {
 export function healthStatusColor(status: HealthStatus): string {
   switch (status) {
     case HealthStatus.HEALTHY:
-      return 'text-success';
+      return 'bg-emerald-500/15 text-emerald-500';
     case HealthStatus.DEGRADED:
-      return 'text-warning';
+      return 'bg-amber-500/15 text-amber-500';
     case HealthStatus.UNHEALTHY:
-      return 'text-destructive';
+      return 'bg-red-500/15 text-red-500';
     default:
-      return 'text-muted-foreground';
+      return 'bg-muted text-muted-foreground';
   }
 }

@@ -24,6 +24,10 @@ type NamespaceConfig struct {
 
 // CreateNamespace provisions a namespace with RBAC, quotas, and network policy.
 func (c *Client) CreateNamespace(ctx context.Context, cfg NamespaceConfig) error {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
 	labels := map[string]string{
 		"idp.platform/managed": "true",
 		"idp.platform/owner":   cfg.OwnerID,
@@ -47,7 +51,7 @@ func (c *Client) CreateNamespace(ctx context.Context, cfg NamespaceConfig) error
 			Annotations: annotations,
 		},
 	}
-	if _, err := c.Clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil {
+	if _, err := cs.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("create namespace: %w", err)
 	}
 
@@ -68,6 +72,10 @@ func (c *Client) CreateNamespace(ctx context.Context, cfg NamespaceConfig) error
 }
 
 func (c *Client) applyResourceQuota(ctx context.Context, namespace string) error {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
 	quota := &corev1.ResourceQuota{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "idp-default-quota",
@@ -85,7 +93,7 @@ func (c *Client) applyResourceQuota(ctx context.Context, namespace string) error
 			},
 		},
 	}
-	_, err := c.Clientset.CoreV1().ResourceQuotas(namespace).Create(ctx, quota, metav1.CreateOptions{})
+	_, err := cs.CoreV1().ResourceQuotas(namespace).Create(ctx, quota, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("create resource quota: %w", err)
 	}
@@ -93,6 +101,10 @@ func (c *Client) applyResourceQuota(ctx context.Context, namespace string) error
 }
 
 func (c *Client) applyLimitRange(ctx context.Context, namespace string) error {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
 	limit := &corev1.LimitRange{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "idp-default-limits",
@@ -118,7 +130,7 @@ func (c *Client) applyLimitRange(ctx context.Context, namespace string) error {
 			},
 		},
 	}
-	_, err := c.Clientset.CoreV1().LimitRanges(namespace).Create(ctx, limit, metav1.CreateOptions{})
+	_, err := cs.CoreV1().LimitRanges(namespace).Create(ctx, limit, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("create limit range: %w", err)
 	}
@@ -126,6 +138,10 @@ func (c *Client) applyLimitRange(ctx context.Context, namespace string) error {
 }
 
 func (c *Client) applyNetworkPolicy(ctx context.Context, namespace string) error {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
 	policyType := networkingv1.PolicyTypeIngress
 	policy := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
@@ -146,7 +162,7 @@ func (c *Client) applyNetworkPolicy(ctx context.Context, namespace string) error
 			},
 		},
 	}
-	_, err := c.Clientset.NetworkingV1().NetworkPolicies(namespace).Create(ctx, policy, metav1.CreateOptions{})
+	_, err := cs.NetworkingV1().NetworkPolicies(namespace).Create(ctx, policy, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("create network policy: %w", err)
 	}
@@ -154,6 +170,10 @@ func (c *Client) applyNetworkPolicy(ctx context.Context, namespace string) error
 }
 
 func (c *Client) applyOwnerRoleBinding(ctx context.Context, namespace, ownerID string) error {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
 	binding := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "idp-owner-binding",
@@ -172,7 +192,7 @@ func (c *Client) applyOwnerRoleBinding(ctx context.Context, namespace, ownerID s
 			Name:     "edit",
 		},
 	}
-	_, err := c.Clientset.RbacV1().RoleBindings(namespace).Create(ctx, binding, metav1.CreateOptions{})
+	_, err := cs.RbacV1().RoleBindings(namespace).Create(ctx, binding, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("create role binding: %w", err)
 	}
@@ -181,7 +201,14 @@ func (c *Client) applyOwnerRoleBinding(ctx context.Context, namespace, ownerID s
 
 // DeleteNamespace removes a namespace from the cluster.
 func (c *Client) DeleteNamespace(ctx context.Context, name string) error {
-	err := c.Clientset.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
+	if !c.Available() {
+		return fmt.Errorf("kubernetes cluster not connected")
+	}
+	err := cs.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil {
 		return fmt.Errorf("delete namespace: %w", err)
 	}
@@ -190,7 +217,11 @@ func (c *Client) DeleteNamespace(ctx context.Context, name string) error {
 
 // NamespaceExists checks if a namespace exists in the cluster.
 func (c *Client) NamespaceExists(ctx context.Context, name string) (bool, error) {
-	_, err := c.Clientset.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return false, csErr
+	}
+	_, err := cs.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return false, nil
 	}
@@ -199,7 +230,11 @@ func (c *Client) NamespaceExists(ctx context.Context, name string) (bool, error)
 
 // ListManagedNamespaces returns namespaces managed by the IDP platform.
 func (c *Client) ListManagedNamespaces(ctx context.Context) ([]corev1.Namespace, error) {
-	list, err := c.Clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	list, err := cs.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
 		LabelSelector: "idp.platform/managed=true",
 	})
 	if err != nil {
@@ -209,8 +244,16 @@ func (c *Client) ListManagedNamespaces(ctx context.Context) ([]corev1.Namespace,
 }
 
 // Ping verifies cluster connectivity.
+//
+// Uses /version rather than listing namespaces: it is one small round trip and
+// does not depend on Available(), so a bound-but-unreachable client can still
+// be probed after a stop.
 func (c *Client) Ping(ctx context.Context) error {
-	_, err := c.Clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{Limit: 1})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
+	_, err := cs.CoreV1().RESTClient().Get().AbsPath("/version").DoRaw(ctx)
 	return err
 }
 

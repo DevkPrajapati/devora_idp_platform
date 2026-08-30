@@ -112,6 +112,22 @@ func (h *Handler) StreamPodLogs(
 	return nil
 }
 
+func (h *Handler) StreamClusterLogs(
+	ctx context.Context,
+	req *connect.Request[idpv1.StreamClusterLogsRequest],
+	stream *connect.ServerStream[idpv1.LogLine],
+) error {
+	err := h.service.StreamClusterLogs(ctx, req.Msg, stream.Send)
+	if err != nil {
+		var connectErr *connect.Error
+		if errors.As(err, &connectErr) {
+			return connectErr
+		}
+		return connect.NewError(connect.CodeInternal, err)
+	}
+	return nil
+}
+
 func (h *Handler) ListNodes(
 	ctx context.Context,
 	req *connect.Request[idpv1.ListNodesRequest],
@@ -132,6 +148,126 @@ func (h *Handler) GetResourceMetrics(
 	req *connect.Request[idpv1.GetResourceMetricsRequest],
 ) (*connect.Response[idpv1.GetResourceMetricsResponse], error) {
 	resp, err := h.service.GetResourceMetrics(ctx, req.Msg)
+	if err != nil {
+		var connectErr *connect.Error
+		if errors.As(err, &connectErr) {
+			return nil, connectErr
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(resp), nil
+}
+
+func (h *Handler) ListClusterNamespaces(
+	ctx context.Context,
+	req *connect.Request[idpv1.ListClusterNamespacesRequest],
+) (*connect.Response[idpv1.ListClusterNamespacesResponse], error) {
+	resp, err := h.service.ListClusterNamespaces(ctx, req.Msg)
+	if err != nil {
+		var connectErr *connect.Error
+		if errors.As(err, &connectErr) {
+			return nil, connectErr
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(resp), nil
+}
+
+func (h *Handler) GetNamespaceResources(
+	ctx context.Context,
+	req *connect.Request[idpv1.GetNamespaceResourcesRequest],
+) (*connect.Response[idpv1.GetNamespaceResourcesResponse], error) {
+	resp, err := h.service.GetNamespaceResources(ctx, req.Msg)
+	if err != nil {
+		var connectErr *connect.Error
+		if errors.As(err, &connectErr) {
+			return nil, connectErr
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(resp), nil
+}
+
+func (h *Handler) ListClusters(
+	ctx context.Context,
+	req *connect.Request[idpv1.ListClustersRequest],
+) (*connect.Response[idpv1.ListClustersResponse], error) {
+	resp, err := h.service.ListClusters(ctx, req.Msg)
+	if err != nil {
+		var connectErr *connect.Error
+		if errors.As(err, &connectErr) {
+			return nil, connectErr
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(resp), nil
+}
+
+func (h *Handler) CreateCluster(
+	ctx context.Context,
+	req *connect.Request[idpv1.CreateClusterRequest],
+) (*connect.Response[idpv1.ManagedCluster], error) {
+	resp, err := h.service.CreateCluster(ctx, req.Msg)
+	if err != nil {
+		var connectErr *connect.Error
+		if errors.As(err, &connectErr) {
+			return nil, connectErr
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(resp), nil
+}
+
+func (h *Handler) ActivateCluster(
+	ctx context.Context,
+	req *connect.Request[idpv1.ActivateClusterRequest],
+) (*connect.Response[idpv1.ManagedCluster], error) {
+	resp, err := h.service.ActivateCluster(ctx, req.Msg)
+	if err != nil {
+		var connectErr *connect.Error
+		if errors.As(err, &connectErr) {
+			return nil, connectErr
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(resp), nil
+}
+
+func (h *Handler) StopCluster(
+	ctx context.Context,
+	req *connect.Request[idpv1.StopClusterRequest],
+) (*connect.Response[idpv1.ManagedCluster], error) {
+	resp, err := h.service.StopCluster(ctx, req.Msg)
+	if err != nil {
+		var connectErr *connect.Error
+		if errors.As(err, &connectErr) {
+			return nil, connectErr
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(resp), nil
+}
+
+func (h *Handler) RestartCluster(
+	ctx context.Context,
+	req *connect.Request[idpv1.RestartClusterRequest],
+) (*connect.Response[idpv1.ManagedCluster], error) {
+	resp, err := h.service.RestartCluster(ctx, req.Msg)
+	if err != nil {
+		var connectErr *connect.Error
+		if errors.As(err, &connectErr) {
+			return nil, connectErr
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(resp), nil
+}
+
+func (h *Handler) DeleteCluster(
+	ctx context.Context,
+	req *connect.Request[idpv1.DeleteClusterRequest],
+) (*connect.Response[idpv1.DeleteClusterResponse], error) {
+	resp, err := h.service.DeleteCluster(ctx, req.Msg)
 	if err != nil {
 		var connectErr *connect.Error
 		if errors.As(err, &connectErr) {

@@ -28,7 +28,7 @@ func (s *Service) requireCluster(ctx context.Context) error {
 	if _, err := auth.UserFromContext(ctx); err != nil {
 		return connect.NewError(connect.CodeUnauthenticated, err)
 	}
-	if s.k8s == nil {
+	if !s.k8s.Available() {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
 	}
 	return nil
@@ -45,7 +45,7 @@ func (s *Service) GetStorageOverview(
 
 	// The overview drives a status card, so a disconnected cluster is reported
 	// as a value rather than an error — the page still renders.
-	if s.k8s == nil {
+	if !s.k8s.Available() {
 		return &idpv1.GetStorageOverviewResponse{Connected: false}, nil
 	}
 

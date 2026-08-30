@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"regexp"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,16 +47,15 @@ type LogStreamOptions struct {
 	Follow bool
 }
 
+const followRetry = 1500 * time.Millisecond
+
 // StreamPodLogs sends each log line to emit until the context is cancelled,
 // the container exits, or emit returns an error.
 //
-// Lines are delivered one at a time rather than buffered: the point of the
-// feature is that a developer watching a failing pod sees output as it happens,
-// and any batching would reintroduce the delay this replaces.
-//
-// An error from emit stops the stream and is returned, which is how a
-// disconnected client tears the whole pipeline down instead of leaving a
-// goroutine reading logs nobody receives.
+// Follow stays open across crash-loops: when the current container is waiting
+// to start, the last crash's logs are dumped (Previous) and the stream retries
+// instead of ending. That is what the deploy viewer needs — the interesting
+// output is often from a container that already died.
 func (c *Client) StreamPodLogs(ctx context.Context, opts LogStreamOptions, emit func(LogLine) error) error {
 	tail := opts.TailLines
 	if tail <= 0 {
@@ -63,21 +65,82 @@ func (c *Client) StreamPodLogs(ctx context.Context, opts LogStreamOptions, emit 
 		tail = maxTailLines
 	}
 
-	podLogOpts := &corev1.PodLogOptions{
-		Container: opts.Container,
-		Follow:    opts.Follow,
-		TailLines: &tail,
-		// Timestamps are requested from the kubelet rather than stamped on
-		// arrival: a line's own time is when the container wrote it, which is
-		// what a developer correlating an incident actually needs.
-		Timestamps: true,
+	if !opts.Follow {
+		err := c.streamOnce(ctx, opts, tail, false, false, nil, emit)
+		if err != nil && isWaitingForLogs(err) {
+			return c.streamOnce(ctx, opts, tail, false, true, nil, emit)
+		}
+		return err
 	}
 
-	// The shared clientset is built with a short rest.Config.Timeout so unary
-	// API calls fail fast. That timeout also covers the whole GetLogs HTTP
-	// request — including Follow — so a live tail would die after a few
-	// seconds and the UI would spin on "reconnecting…". Use a zero-timeout
-	// client for this stream only.
+	dumpedPrevious := false
+	var since *metav1.Time
+	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+
+		err := c.streamOnce(ctx, opts, tail, true, false, since, func(line LogLine) error {
+			if parsed, parseErr := time.Parse(time.RFC3339Nano, line.Timestamp); parseErr == nil {
+				next := metav1.NewTime(parsed.Add(time.Nanosecond))
+				since = &next
+			}
+			return emit(line)
+		})
+		if ctx.Err() != nil {
+			return nil
+		}
+		if err == nil {
+			dumpedPrevious = false
+			if err := waitFollowRetry(ctx); err != nil {
+				return nil
+			}
+			continue
+		}
+		if isWaitingForLogs(err) {
+			if !dumpedPrevious {
+				_ = c.streamOnce(ctx, opts, tail, false, true, nil, emit)
+				dumpedPrevious = true
+			}
+			if err := waitFollowRetry(ctx); err != nil {
+				return nil
+			}
+			continue
+		}
+		if isTransientLogStreamError(err) {
+			if err := waitFollowRetry(ctx); err != nil {
+				return nil
+			}
+			continue
+		}
+		return err
+	}
+}
+
+func waitFollowRetry(ctx context.Context) error {
+	timer := time.NewTimer(followRetry)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (c *Client) streamOnce(ctx context.Context, opts LogStreamOptions, tail int64, follow, previous bool, since *metav1.Time, emit func(LogLine) error) error {
+	podLogOpts := &corev1.PodLogOptions{
+		Container:  opts.Container,
+		Follow:     follow,
+		Previous:   previous,
+		Timestamps: true,
+	}
+	if since != nil {
+		podLogOpts.SinceTime = since
+	} else {
+		podLogOpts.TailLines = &tail
+	}
+
 	clientset, err := c.logStreamClientset()
 	if err != nil {
 		return err
@@ -90,35 +153,90 @@ func (c *Client) StreamPodLogs(ctx context.Context, opts LogStreamOptions, emit 
 	}
 	defer func() { _ = stream.Close() }()
 
+	return scanLogStream(ctx, opts.PodName, stream, emit)
+}
+
+func scanLogStream(ctx context.Context, podName string, stream io.Reader, emit func(LogLine) error) error {
 	scanner := bufio.NewScanner(stream)
 	scanner.Buffer(make([]byte, 0, 64<<10), maxLogLineBytes)
 
 	for scanner.Scan() {
-		// Checked every line so a cancelled request stops promptly instead of
-		// blocking until the container next writes something.
 		if ctx.Err() != nil {
 			return nil
 		}
-
-		if err := emit(ParseLogLine(opts.PodName, scanner.Text())); err != nil {
+		if err := emit(ParseLogLine(podName, scanner.Text())); err != nil {
 			return err
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		// A cancelled context surfaces here as a read error on a closed body.
-		// That is the client leaving, not a failure worth reporting.
 		if ctx.Err() != nil {
 			return nil
 		}
-		// An over-long line is the one scanner error worth naming, since
-		// "token too long" tells the user nothing about which pod misbehaved.
 		if strings.Contains(err.Error(), "token too long") {
-			return fmt.Errorf("pod %s wrote a log line over %d KiB", opts.PodName, maxLogLineBytes>>10)
+			return fmt.Errorf("pod %s wrote a log line over %d KiB", podName, maxLogLineBytes>>10)
 		}
 		return fmt.Errorf("read log stream: %w", err)
 	}
 	return nil
+}
+
+// isWaitingForLogs reports kubelet errors from GetLogs while the container is
+// not running. Follow cannot attach in that state; Previous still can.
+func isWaitingForLogs(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "waiting to start") ||
+		strings.Contains(lower, "containernotfound") ||
+		strings.Contains(lower, "container not found") ||
+		strings.Contains(lower, "containercreating") ||
+		strings.Contains(lower, "podinitializing") ||
+		strings.Contains(lower, "crashloopbackoff")
+}
+
+// isTransientLogStreamError is an idle-or-dropped kubelet follow. npm install
+// and similar steps can sit quiet for a minute; treating that as fatal closed
+// the Connect stream and left the UI stuck on "Reconnecting".
+func isTransientLogStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	needles := []string{
+		"connection reset",
+		"broken pipe",
+		"unexpected eof",
+		"i/o timeout",
+		"timeout awaiting",
+		"http2: stream closed",
+		"transport is closing",
+		"use of closed network connection",
+		"connection refused",
+		"eof",
+	}
+	for _, n := range needles {
+		if strings.Contains(lower, n) {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	ansiCSI    = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+	ansiOSC    = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+	orphanSGR  = regexp.MustCompile(`\[[0-9;]{1,4}m`)
+	ansiEscape = regexp.MustCompile(`\x1b.`)
+)
+
+func stripANSI(s string) string {
+	s = ansiOSC.ReplaceAllString(s, "")
+	s = ansiCSI.ReplaceAllString(s, "")
+	s = ansiEscape.ReplaceAllString(s, "")
+	// ESC already eaten by a previous hop leaves "[37mDEBU [0m".
+	return orphanSGR.ReplaceAllString(s, "")
 }
 
 // ParseLogLine splits a kubelet-timestamped line into its parts.
@@ -131,9 +249,9 @@ func ParseLogLine(podName, raw string) LogLine {
 
 	timestamp, message, found := strings.Cut(line, " ")
 	if !found || !looksLikeTimestamp(timestamp) {
-		return LogLine{PodName: podName, Message: line}
+		return LogLine{PodName: podName, Message: stripANSI(line)}
 	}
-	return LogLine{PodName: podName, Timestamp: timestamp, Message: message}
+	return LogLine{PodName: podName, Timestamp: timestamp, Message: stripANSI(message)}
 }
 
 // looksLikeTimestamp does a shape check rather than a full parse. The kubelet's
@@ -152,22 +270,45 @@ func looksLikeTimestamp(token string) bool {
 }
 
 func (c *Client) logStreamClientset() (kubernetes.Interface, error) {
-	if c == nil || c.Config == nil {
+	if c == nil {
 		return nil, fmt.Errorf("kubernetes cluster not connected")
 	}
-	cfg := rest.CopyConfig(c.Config)
-	cfg.Timeout = 0
-	clientset, err := kubernetes.NewForConfig(cfg)
+	c.mu.RLock()
+	if c.streamCS != nil {
+		cs := c.streamCS
+		c.mu.RUnlock()
+		return cs, nil
+	}
+	cfg := c.Config
+	c.mu.RUnlock()
+	if cfg == nil {
+		return nil, fmt.Errorf("kubernetes cluster not connected")
+	}
+
+	copied := rest.CopyConfig(cfg)
+	copied.Timeout = 0
+	clientset, err := kubernetes.NewForConfig(copied)
 	if err != nil {
 		return nil, fmt.Errorf("log-stream clientset: %w", err)
 	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.streamCS != nil {
+		return c.streamCS, nil
+	}
+	c.streamCS = clientset
 	return clientset, nil
 }
 
 // ListPodNamesForApp returns the pods backing a deployment, used by the UI to
 // offer a per-pod filter.
 func (c *Client) ListPodNamesForApp(ctx context.Context, namespace, app string) ([]string, error) {
-	pods, err := c.Clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	pods, err := cs.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "app=" + app,
 	})
 	if err != nil {

@@ -16,6 +16,7 @@ import (
 	"github.com/idp/platform/backend/internal/pkg/pagination"
 	"github.com/idp/platform/backend/internal/repository"
 	"github.com/jackc/pgx/v5/pgtype"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 var namespaceNameRegex = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
@@ -59,6 +60,72 @@ func (s *Service) resolveProject(ctx context.Context, slug string) (pgtype.UUID,
 		return pgtype.UUID{}, "", connect.NewError(connect.CodeNotFound, fmt.Errorf("project %q not found", slug))
 	}
 	return project.ID, project.Slug, nil
+}
+
+// clusterPresence reports which namespaces the connected cluster actually has.
+//
+// The platform's namespace table and the cluster drift apart for reasons the
+// platform never sees: a namespace deleted with kubectl, or a cluster deleted
+// and recreated underneath it. Serving the table unchecked is what produced
+// rows for namespaces that no longer existed, where every drill-in — resources,
+// pods, logs — failed with a NotFound the user had no way to interpret.
+//
+// The lookup is one list call, served from the client's short-lived cache and
+// therefore shared with the resource explorer rather than added on top of it.
+// A failure returns checked=false: the answer is unknown, which is reported as
+// such instead of being flattened into "missing".
+func (s *Service) clusterPresence(ctx context.Context) (present map[string]bool, checked bool) {
+	if !s.k8s.Available() {
+		return nil, false
+	}
+	live, err := s.k8s.ListClusterNamespaces(ctx)
+	if err != nil {
+		return nil, false
+	}
+	present = make(map[string]bool, len(live))
+	for _, ns := range live {
+		present[ns.Name] = true
+	}
+	return present, true
+}
+
+// annotatePresence stamps drift onto a namespace payload, and records
+// provenance for rows confirmed against the live cluster.
+//
+// Adopting confirmed rows matters for the rebuild case: once a namespace is
+// known to belong to the current cluster, a later cluster rebuild can retire it
+// wholesale instead of leaving it to be re-checked forever.
+func (s *Service) annotatePresence(
+	ctx context.Context,
+	out *idpv1.Namespace,
+	row *db.Namespace,
+	present map[string]bool,
+	checked bool,
+	clusterUID string,
+) {
+	out.ClusterChecked = checked
+	if !checked {
+		return
+	}
+	out.ExistsInCluster = present[row.Name]
+	if out.ExistsInCluster && clusterUID != "" && row.ClusterUid == nil {
+		// Best-effort backfill. A failure here only means the row is checked
+		// again next time, so it must not fail the read.
+		_ = s.repo.AdoptToCluster(ctx, row.Name, clusterUID)
+	}
+}
+
+// activeClusterUID fingerprints the connected cluster, or returns empty when
+// there is none or it cannot be read.
+func (s *Service) activeClusterUID(ctx context.Context) string {
+	if !s.k8s.Available() {
+		return ""
+	}
+	uid, err := s.k8s.ClusterUID(ctx)
+	if err != nil {
+		return ""
+	}
+	return uid
 }
 
 // projectSlugFor resolves the slug to report for a namespace row. Failures
@@ -147,7 +214,7 @@ func (s *Service) Create(ctx context.Context, req *idpv1.CreateNamespaceRequest)
 		displayName = name
 	}
 
-	if s.k8s == nil {
+	if !s.k8s.Available() {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
 	}
 
@@ -172,6 +239,8 @@ func (s *Service) Create(ctx context.Context, req *idpv1.CreateNamespaceRequest)
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	// Recorded so a later cluster rebuild can tell this namespace apart from one
+	// provisioned into the cluster that replaced it.
 	ns, err := s.repo.Create(ctx, repository.CreateNamespaceInput{
 		Name:        name,
 		DisplayName: displayName,
@@ -181,6 +250,7 @@ func (s *Service) Create(ctx context.Context, req *idpv1.CreateNamespaceRequest)
 		Labels:      req.Labels,
 		Annotations: req.Annotations,
 		ProjectID:   projectID,
+		ClusterUID:  s.activeClusterUID(ctx),
 	})
 	if err != nil {
 		_ = s.k8s.DeleteNamespace(ctx, name)
@@ -203,9 +273,10 @@ func (s *Service) Create(ctx context.Context, req *idpv1.CreateNamespaceRequest)
 	s.audit.RecordFromUser(ctx, "namespace.create", name, name, "namespace", "success",
 		map[string]any{"project": projectSlug})
 
-	return &idpv1.CreateNamespaceResponse{
-		Namespace: convert.NamespaceToProto(*ns, projectSlug),
-	}, nil
+	created := convert.NamespaceToProto(*ns, projectSlug)
+	created.ClusterChecked = true
+	created.ExistsInCluster = true
+	return &idpv1.CreateNamespaceResponse{Namespace: created}, nil
 }
 
 // Get retrieves a namespace by name. Non-admins may only read namespaces they
@@ -226,7 +297,15 @@ func (s *Service) Get(ctx context.Context, req *idpv1.GetNamespaceRequest) (*idp
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("namespace not found"))
 	}
 
-	return &idpv1.GetNamespaceResponse{Namespace: convert.NamespaceToProto(*ns, s.projectSlugFor(ctx, ns))}, nil
+	out := convert.NamespaceToProto(*ns, s.projectSlugFor(ctx, ns))
+	present, checked := s.clusterPresence(ctx)
+	clusterUID := ""
+	if checked {
+		clusterUID = s.activeClusterUID(ctx)
+	}
+	s.annotatePresence(ctx, out, ns, present, checked, clusterUID)
+
+	return &idpv1.GetNamespaceResponse{Namespace: out}, nil
 }
 
 // List returns paginated namespaces.
@@ -264,6 +343,15 @@ func (s *Service) List(ctx context.Context, req *idpv1.ListNamespacesRequest) (*
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	// Resolved once for the page rather than per row: the presence map is a
+	// single cached list call, and re-asking per namespace would turn one page
+	// into twenty round trips.
+	present, checked := s.clusterPresence(ctx)
+	clusterUID := ""
+	if checked {
+		clusterUID = s.activeClusterUID(ctx)
+	}
+
 	// Slugs are resolved through a per-page cache: without it a page of 20
 	// namespaces sharing one project would issue 20 identical project lookups.
 	slugCache := make(map[string]string)
@@ -276,7 +364,9 @@ func (s *Service) List(ctx context.Context, req *idpv1.ListNamespacesRequest) (*
 			slug = s.projectSlugFor(ctx, &row)
 			slugCache[key] = slug
 		}
-		namespaces = append(namespaces, convert.NamespaceToProto(row, slug))
+		out := convert.NamespaceToProto(row, slug)
+		s.annotatePresence(ctx, out, &row, present, checked, clusterUID)
+		namespaces = append(namespaces, out)
 	}
 
 	return &idpv1.ListNamespacesResponse{
@@ -299,8 +389,8 @@ func (s *Service) Delete(ctx context.Context, req *idpv1.DeleteNamespaceRequest)
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("namespace not found"))
 	}
 
-	if s.k8s != nil {
-		if err := s.k8s.DeleteNamespace(ctx, req.Name); err != nil {
+	if s.k8s.Available() {
+		if err := s.k8s.DeleteNamespace(ctx, req.Name); err != nil && !apierrors.IsNotFound(err) {
 			s.audit.RecordFromUser(ctx, "namespace.delete", req.Name, req.Name, "namespace", "failure", map[string]any{"error": err.Error()})
 			return nil, connect.NewError(connect.CodeInternal, err)
 		}

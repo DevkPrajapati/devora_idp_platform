@@ -7,6 +7,7 @@
   import AreaChart from '$components/charts/AreaChart.svelte';
   import BarChart from '$components/charts/BarChart.svelte';
   import Meter from '$components/charts/Meter.svelte';
+  import ClusterArchitecture from '$components/ClusterArchitecture.svelte';
   import {
     getOverview,
     listEvents,
@@ -14,30 +15,41 @@
     listNodes,
     listPods,
     listServices,
+    listClusters,
   } from '$services/cluster';
   import { listAuditLogs } from '$services/audit';
   import { HealthStatus } from '$types/health';
   import { router } from '$stores/router';
   import { createQuery } from '@tanstack/svelte-query';
-  import { Activity, Box, Container, Globe, Layers, Server, ScrollText, Cpu, ArrowRight } from '@lucide/svelte';
+  import { Activity, Box, Container, Globe, Layers, Network, Server, ScrollText, Cpu, ArrowRight } from '@lucide/svelte';
 
   const overviewQuery = createQuery(() => ({
     queryKey: ['cluster-overview'],
     queryFn: getOverview,
-    refetchInterval: 10000,
+    refetchInterval: 20000,
   }));
+
+  const fleetQuery = createQuery(() => ({
+    queryKey: ['clusters'],
+    queryFn: listClusters,
+    refetchInterval: 15000,
+  }));
+
+  const fleetClusters = $derived(fleetQuery.data?.clusters ?? []);
+  const runningClusterCount = $derived(fleetClusters.filter((c) => c.status === 'running').length);
+  const activeCluster = $derived(fleetClusters.find((c) => c.active) ?? null);
 
   // Cluster-wide (all namespaces) — same mental model as minikube dashboard.
   const podsQuery = createQuery(() => ({
-    queryKey: ['dashboard-pods'],
+    queryKey: ['pods', 'all'],
     queryFn: () => listPods(''),
-    refetchInterval: 10000,
+    refetchInterval: 15000,
   }));
 
   const servicesQuery = createQuery(() => ({
-    queryKey: ['dashboard-services'],
+    queryKey: ['services', 'all'],
     queryFn: () => listServices(''),
-    refetchInterval: 15000,
+    refetchInterval: 20000,
   }));
 
   const podStatusChart = $derived.by(() => {
@@ -95,15 +107,13 @@
   const eventsQuery = createQuery(() => ({
     queryKey: ['cluster-events'],
     queryFn: () => listEvents('', 50),
-    refetchInterval: 15000,
+    refetchInterval: 20000,
   }));
 
-  // Widened from 5 to 100 to give the activity trend enough history to plot.
-  // The card below still shows only the newest few.
   const auditQuery = createQuery(() => ({
     queryKey: ['recent-audit-logs'],
     queryFn: () => listAuditLogs(1, 100).then(res => res.logs),
-    refetchInterval: 15000,
+    refetchInterval: 30000,
   }));
 
   const recentAudit = $derived((auditQuery.data ?? []).slice(0, 5));
@@ -112,13 +122,13 @@
   const metricsQuery = createQuery(() => ({
     queryKey: ['cluster-resource-metrics'],
     queryFn: getResourceMetrics,
-    refetchInterval: 15000,
+    refetchInterval: 20000,
   }));
 
   const nodesQuery = createQuery(() => ({
     queryKey: ['cluster-nodes'],
     queryFn: listNodes,
-    refetchInterval: 30000,
+    refetchInterval: 45000,
   }));
 
   function getHealthStatus(connected: boolean): HealthStatus {
@@ -179,16 +189,20 @@
   });
 </script>
 
-<div class="space-y-6">
+<div class="page-stack">
   <div>
-    <h1 class="text-2xl font-semibold tracking-tight">Dashboard</h1>
+    <h1 class="text-xl font-semibold tracking-tight md:text-2xl">Dashboard</h1>
     <p class="mt-1 text-sm text-muted-foreground">
-      Cluster inventory like a Kubernetes dashboard — pods, services, charts, no CLI.
+      Fleet size, live Kubernetes architecture, and workload inventory — no CLI.
     </p>
   </div>
 
   <!-- Cluster Health Banner -->
-  <Card class="border-primary/20 bg-primary/5">
+  <Card class={overviewQuery.data?.connected
+    ? 'border-emerald-500/30 bg-emerald-500/5'
+    : overviewQuery.error || overviewQuery.data
+      ? 'border-red-500/30 bg-red-500/5'
+      : ''}>
     <CardHeader>
       <div class="flex items-center justify-between">
         <CardTitle class="text-base font-semibold">Cluster Connection Status</CardTitle>
@@ -214,19 +228,25 @@
       {:else if overviewQuery.data}
         <div class="flex flex-wrap gap-x-8 gap-y-4">
           <div>
-            <p class="text-xs text-muted-foreground">Cluster Name</p>
+            <p class="text-xs text-muted-foreground">Active cluster</p>
             <p class="text-sm font-semibold text-foreground">{overviewQuery.data.clusterName}</p>
           </div>
           <div>
-            <p class="text-xs text-muted-foreground">Control Plane Nodes</p>
+            <p class="text-xs text-muted-foreground">Clusters in fleet</p>
+            <p class="text-sm font-semibold text-foreground">
+              {runningClusterCount} running · {fleetClusters.length} total
+            </p>
+          </div>
+          <div>
+            <p class="text-xs text-muted-foreground">Control plane nodes</p>
             <p class="text-sm font-semibold text-foreground">
               {overviewQuery.data.readyNodes} / {overviewQuery.data.nodeCount} Ready
             </p>
           </div>
           <div>
-            <p class="text-xs text-muted-foreground">Kubernetes Status</p>
-            <span class="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-500">
-              Active
+            <p class="text-xs text-muted-foreground">Kubernetes status</p>
+            <span class="inline-flex items-center rounded-full {overviewQuery.data.connected ? 'bg-emerald-500/15 text-emerald-500' : 'bg-red-500/15 text-red-500'} px-2 py-0.5 text-xs font-medium">
+              {overviewQuery.data.connected ? 'Connected' : 'Disconnected'}
             </span>
           </div>
         </div>
@@ -235,7 +255,54 @@
   </Card>
 
   <!-- Metric Count Cards — click through to full lists -->
-  <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+  <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <button
+      type="button"
+      onclick={() => router.navigate('/clusters')}
+      class="text-left transition-colors hover:opacity-90"
+    >
+      <Card class="h-full">
+        <CardHeader>
+          <div class="flex items-center justify-between">
+            <CardTitle class="text-sm font-medium text-muted-foreground">Clusters</CardTitle>
+            <Network class="h-4 w-4 text-muted-foreground" />
+          </div>
+        </CardHeader>
+        <CardContent>
+          <p class="text-2xl font-semibold tracking-tight xl:text-3xl">
+            {fleetQuery.data?.clusters.length ?? '—'}
+          </p>
+          <p class="mt-1 text-xs text-muted-foreground">
+            {runningClusterCount} running{activeCluster ? ` · active ${activeCluster.name}` : ''}
+          </p>
+        </CardContent>
+      </Card>
+    </button>
+
+    <button
+      type="button"
+      onclick={() => router.navigate('/clusters', activeCluster ? { id: activeCluster.id } : undefined)}
+      class="text-left transition-colors hover:opacity-90"
+    >
+      <Card class="h-full">
+        <CardHeader>
+          <div class="flex items-center justify-between">
+            <CardTitle class="text-sm font-medium text-muted-foreground">Nodes</CardTitle>
+            <Server class="h-4 w-4 text-muted-foreground" />
+          </div>
+        </CardHeader>
+        <CardContent>
+          <p class="text-2xl font-semibold tracking-tight xl:text-3xl">
+            {overviewQuery.data?.readyNodes ?? 0}
+            <span class="text-sm font-normal text-muted-foreground">
+              / {overviewQuery.data?.nodeCount ?? nodesQuery.data?.length ?? 0}
+            </span>
+          </p>
+          <p class="mt-1 text-xs text-muted-foreground">Ready / total · open architecture</p>
+        </CardContent>
+      </Card>
+    </button>
+
     <button
       type="button"
       onclick={() => router.navigate('/namespaces')}
@@ -249,7 +316,7 @@
           </div>
         </CardHeader>
         <CardContent>
-          <p class="text-3xl font-semibold tracking-tight">
+          <p class="text-2xl font-semibold tracking-tight xl:text-3xl">
             {overviewQuery.data?.namespaceCount ?? '—'}
           </p>
           <p class="mt-1 text-xs text-muted-foreground">Click to open</p>
@@ -270,7 +337,7 @@
           </div>
         </CardHeader>
         <CardContent>
-          <p class="text-3xl font-semibold tracking-tight">
+          <p class="text-2xl font-semibold tracking-tight xl:text-3xl">
             {overviewQuery.data?.deploymentCount ?? '—'}
           </p>
           <p class="mt-1 text-xs text-muted-foreground">Click to open</p>
@@ -291,7 +358,7 @@
           </div>
         </CardHeader>
         <CardContent>
-          <p class="text-3xl font-semibold tracking-tight">
+          <p class="text-2xl font-semibold tracking-tight xl:text-3xl">
             {servicesQuery.data?.length ?? overviewQuery.data?.serviceCount ?? '—'}
           </p>
           <p class="mt-1 text-xs text-muted-foreground">All namespaces · click to open</p>
@@ -312,7 +379,7 @@
           </div>
         </CardHeader>
         <CardContent>
-          <p class="text-3xl font-semibold tracking-tight">
+          <p class="text-2xl font-semibold tracking-tight xl:text-3xl">
             {overviewQuery.data?.runningPods ?? 0}
             <span class="text-sm font-normal text-muted-foreground">
               / {podsQuery.data?.length ?? overviewQuery.data?.podCount ?? 0}
@@ -323,6 +390,40 @@
       </Card>
     </button>
   </div>
+
+  <Card>
+    <CardHeader>
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <CardTitle class="text-sm font-semibold">Kubernetes architecture</CardTitle>
+          <p class="mt-1 text-xs text-muted-foreground">
+            Nodes run pods. Services sit in front of those pods. Click a cluster on the Clusters page for the full map.
+          </p>
+        </div>
+        <button
+          type="button"
+          onclick={() => router.navigate('/clusters', activeCluster ? { id: activeCluster.id } : undefined)}
+          class="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          Open cluster <ArrowRight class="h-3 w-3" />
+        </button>
+      </div>
+    </CardHeader>
+    <CardContent>
+      <ClusterArchitecture
+        clusterName={overviewQuery.data?.clusterName || activeCluster?.name || 'cluster'}
+        connected={overviewQuery.data?.connected ?? false}
+        nodes={nodesQuery.data ?? []}
+        pods={podsQuery.data ?? []}
+        services={servicesQuery.data ?? []}
+        compact={true}
+        loading={overviewQuery.data?.connected !== false && (nodesQuery.isPending || podsQuery.isPending || servicesQuery.isPending)}
+        error={overviewQuery.data?.connected
+          ? (nodesQuery.error?.message || podsQuery.error?.message || servicesQuery.error?.message || '')
+          : ''}
+      />
+    </CardContent>
+  </Card>
 
   <!-- Workload charts (minikube-dashboard style) -->
   <div class="grid gap-4 md:grid-cols-2">
@@ -561,7 +662,7 @@
                 <span
                   class="inline-flex h-2.5 w-2.5 rounded-full {node.status === 'Ready' ? 'bg-emerald-500' : 'bg-red-500'}"
                 ></span>
-                <span class="text-sm font-medium">{node.status}</span>
+                <span class="text-sm font-medium {node.status === 'Ready' ? 'text-emerald-500' : 'text-red-500'}">{node.status}</span>
               </div>
             </div>
           {/each}

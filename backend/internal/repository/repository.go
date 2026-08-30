@@ -130,6 +130,11 @@ type CreateNamespaceInput struct {
 	// UUID stores NULL, leaving the namespace unattached and therefore outside
 	// the reach of any project-scoped registry credential.
 	ProjectID pgtype.UUID
+	// ClusterUID identifies the cluster this namespace was provisioned into.
+	// Empty stores NULL, which marks the row's provenance as unknown and
+	// defers to a live existence check rather than assuming it belongs to
+	// whichever cluster happens to be active.
+	ClusterUID string
 }
 
 // Create stores namespace metadata.
@@ -153,6 +158,7 @@ func (r *NamespaceRepository) Create(ctx context.Context, input CreateNamespaceI
 		Annotations: annotations,
 		Status:      "active",
 		ProjectID:   input.ProjectID,
+		ClusterUid:  optionalString(input.ClusterUID),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create namespace: %w", err)
@@ -226,6 +232,56 @@ func (r *NamespaceRepository) MarkDeleted(ctx context.Context, name string) erro
 		return fmt.Errorf("delete namespace: %w", err)
 	}
 	return nil
+}
+
+// AdoptToCluster records that a namespace was seen in the given cluster.
+func (r *NamespaceRepository) AdoptToCluster(ctx context.Context, name, clusterUID string) error {
+	if clusterUID == "" {
+		return nil
+	}
+	err := r.queries.SetNamespaceClusterUID(ctx, db.SetNamespaceClusterUIDParams{
+		Name:       name,
+		ClusterUid: &clusterUID,
+	})
+	if err != nil {
+		return fmt.Errorf("adopt namespace to cluster: %w", err)
+	}
+	return nil
+}
+
+// RetireForeignClusters soft-deletes namespaces that belong to a cluster other
+// than clusterUID, and reports which names were retired. Rows with unknown
+// provenance (NULL cluster_uid) are left alone.
+func (r *NamespaceRepository) RetireForeignClusters(ctx context.Context, clusterUID string) ([]string, error) {
+	if clusterUID == "" {
+		return nil, nil
+	}
+	names, err := r.queries.OrphanNamespacesFromOtherClusters(ctx, &clusterUID)
+	if err != nil {
+		return nil, fmt.Errorf("retire foreign namespaces: %w", err)
+	}
+	return names, nil
+}
+
+// RetireCluster soft-deletes namespaces adopted onto clusterUID.
+func (r *NamespaceRepository) RetireCluster(ctx context.Context, clusterUID string) ([]string, error) {
+	if clusterUID == "" {
+		return nil, nil
+	}
+	names, err := r.queries.RetireNamespacesOfCluster(ctx, &clusterUID)
+	if err != nil {
+		return nil, fmt.Errorf("retire cluster namespaces: %w", err)
+	}
+	return names, nil
+}
+
+// RetireUnprovenanced soft-deletes namespace rows that were never fingerprinted.
+func (r *NamespaceRepository) RetireUnprovenanced(ctx context.Context) ([]string, error) {
+	names, err := r.queries.RetireUnprovenancedNamespaces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("retire unprovenanced namespaces: %w", err)
+	}
+	return names, nil
 }
 
 func optionalString(s string) *string {

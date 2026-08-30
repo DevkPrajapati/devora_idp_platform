@@ -1,11 +1,5 @@
 package auth
 
-import (
-	"context"
-
-	"connectrpc.com/connect"
-)
-
 // Access classifies what a caller must hold to invoke a procedure.
 type Access int
 
@@ -58,14 +52,23 @@ var policy = map[string]Access{
 
 	// Cluster. Read-only views, but pod logs can contain application secrets,
 	// so they are held to the same bar as other reads rather than made public.
-	"/idp.v1.ClusterService/GetOverview":        AccessRead,
-	"/idp.v1.ClusterService/ListEvents":         AccessRead,
-	"/idp.v1.ClusterService/ListPods":           AccessRead,
-	"/idp.v1.ClusterService/ListServices":       AccessRead,
-	"/idp.v1.ClusterService/ListNodes":          AccessRead,
-	"/idp.v1.ClusterService/GetResourceMetrics": AccessRead,
-	"/idp.v1.ClusterService/GetPodLogs":         AccessRead,
-	"/idp.v1.ClusterService/StreamPodLogs":      AccessRead,
+	"/idp.v1.ClusterService/GetOverview":           AccessRead,
+	"/idp.v1.ClusterService/ListEvents":            AccessRead,
+	"/idp.v1.ClusterService/ListPods":              AccessRead,
+	"/idp.v1.ClusterService/ListServices":          AccessRead,
+	"/idp.v1.ClusterService/ListNodes":             AccessRead,
+	"/idp.v1.ClusterService/GetResourceMetrics":    AccessRead,
+	"/idp.v1.ClusterService/GetPodLogs":            AccessRead,
+	"/idp.v1.ClusterService/StreamPodLogs":         AccessRead,
+	"/idp.v1.ClusterService/StreamClusterLogs":     AccessRead,
+	"/idp.v1.ClusterService/ListClusterNamespaces": AccessRead,
+	"/idp.v1.ClusterService/GetNamespaceResources": AccessRead,
+	"/idp.v1.ClusterService/ListClusters":          AccessRead,
+	"/idp.v1.ClusterService/CreateCluster":         AccessAdmin,
+	"/idp.v1.ClusterService/ActivateCluster":       AccessAdmin,
+	"/idp.v1.ClusterService/StopCluster":           AccessAdmin,
+	"/idp.v1.ClusterService/RestartCluster":        AccessAdmin,
+	"/idp.v1.ClusterService/DeleteCluster":         AccessAdmin,
 
 	// Storage. Entirely read-only today.
 	"/idp.v1.StorageService/GetStorageOverview":         AccessRead,
@@ -138,39 +141,5 @@ func Allows(user *User, level Access) bool {
 		return user != nil && user.IsAdmin()
 	default:
 		return false
-	}
-}
-
-// NewAuthorizationInterceptor enforces the policy table.
-//
-// It runs after NewInterceptor has put the user on the context, so it can
-// assume authentication already succeeded for anything non-public.
-func NewAuthorizationInterceptor() connect.UnaryInterceptorFunc {
-	return func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-			procedure := req.Spec().Procedure
-
-			level, known := AccessFor(procedure)
-			if !known {
-				// Fail closed. Reaching this means a procedure shipped without
-				// a policy entry, which the coverage test exists to prevent.
-				return nil, connect.NewError(connect.CodePermissionDenied, ErrUnclassifiedProcedure)
-			}
-
-			if level == AccessPublic {
-				return next(ctx, req)
-			}
-
-			user, err := UserFromContext(ctx)
-			if err != nil {
-				return nil, connect.NewError(connect.CodeUnauthenticated, ErrMissingToken)
-			}
-
-			if !Allows(user, level) {
-				return nil, connect.NewError(connect.CodePermissionDenied, ErrInsufficientPermissions)
-			}
-
-			return next(ctx, req)
-		}
 	}
 }

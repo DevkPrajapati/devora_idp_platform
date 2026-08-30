@@ -82,6 +82,7 @@ func DeploymentToProto(d *kubernetes.DeploymentInfo) *idpv1.Deployment {
 		ReadinessProbe:   probeToProto(d.ReadinessProbe),
 		LivenessProbe:    probeToProto(d.LivenessProbe),
 		Resources:        resourcesToProto(d.Resources),
+		Autoscaling:      autoscalingToProto(d.Autoscaling),
 		CreatedAt:        d.CreatedAt.Format(time.RFC3339),
 	}
 }
@@ -114,6 +115,18 @@ func resourcesToProto(r kubernetes.ResourceSpec) *idpv1.ResourceLimits {
 		CpuLimit:      r.CPULimit,
 		MemoryRequest: r.MemoryRequest,
 		MemoryLimit:   r.MemoryLimit,
+	}
+}
+
+func autoscalingToProto(s kubernetes.AutoscalingSpec) *idpv1.Autoscaling {
+	if !s.Enabled() {
+		return nil
+	}
+	return &idpv1.Autoscaling{
+		MinReplicas:              s.MinReplicas,
+		MaxReplicas:              s.MaxReplicas,
+		CpuAverageUtilization:    s.CPUTarget,
+		MemoryAverageUtilization: s.MemoryTarget,
 	}
 }
 
@@ -206,14 +219,54 @@ func derefString(s *string) string {
 
 // PodToProto converts K8s pod info to protobuf.
 func PodToProto(p kubernetes.PodInfo) *idpv1.PodInfo {
+	containers := make([]*idpv1.ContainerInfo, 0, len(p.Containers))
+	for _, c := range p.Containers {
+		containers = append(containers, ContainerToProto(c))
+	}
 	return &idpv1.PodInfo{
-		Name:         p.Name,
-		Namespace:    p.Namespace,
-		Status:       p.Status,
-		Ip:           p.IP,
-		Node:         p.Node,
-		RestartCount: p.RestartCount,
-		CreatedAt:    p.CreatedAt.Format(time.RFC3339),
+		Name:              p.Name,
+		Namespace:         p.Namespace,
+		Status:            p.Status,
+		Ip:                p.IP,
+		Node:              p.Node,
+		RestartCount:      p.RestartCount,
+		CreatedAt:         p.CreatedAt.Format(time.RFC3339),
+		Containers:        containers,
+		Phase:             p.Phase,
+		Reason:            p.Reason,
+		Message:           p.Message,
+		Ready:             p.Ready,
+		QosClass:          p.QOSClass,
+		SchedulingMessage: p.SchedulingMessage,
+	}
+}
+
+// ContainerToProto converts one container's state to protobuf.
+func ContainerToProto(c kubernetes.ContainerInfo) *idpv1.ContainerInfo {
+	// A never-started container has a zero start time; formatting it would
+	// report the year 1 as a start date.
+	startedAt := ""
+	if !c.StartedAt.IsZero() {
+		startedAt = c.StartedAt.Format(time.RFC3339)
+	}
+	return &idpv1.ContainerInfo{
+		Name:                  c.Name,
+		Image:                 c.Image,
+		Ready:                 c.Ready,
+		State:                 c.State,
+		Reason:                c.Reason,
+		Message:               c.Message,
+		RestartCount:          c.RestartCount,
+		CpuRequest:            c.CPURequest,
+		MemoryRequest:         c.MemoryRequest,
+		CpuLimit:              c.CPULimit,
+		MemoryLimit:           c.MemoryLimit,
+		HasLivenessProbe:      c.HasLivenessProbe,
+		HasReadinessProbe:     c.HasReadinessProbe,
+		HasStartupProbe:       c.HasStartupProbe,
+		StartedAt:             startedAt,
+		LastExitCode:          c.LastExitCode,
+		LastTerminationReason: c.LastTerminationReason,
 	}
 }
 
@@ -232,14 +285,66 @@ func ServiceToProto(s kubernetes.ServiceInfo) *idpv1.ServiceInfo {
 
 // NodeToProto converts node info to protobuf.
 func NodeToProto(n kubernetes.NodeInfo) *idpv1.NodeInfo {
+	createdAt := ""
+	if !n.CreatedAt.IsZero() {
+		createdAt = n.CreatedAt.Format(time.RFC3339)
+	}
 	return &idpv1.NodeInfo{
-		Name:              n.Name,
-		Status:            n.Status,
-		Role:              n.Role,
-		CpuCapacity:       n.CPUCapacity,
-		MemoryCapacity:    n.MemoryCapacity,
-		CpuAllocatable:    n.CPUAllocatable,
-		MemoryAllocatable: n.MemoryAllocatable,
+		Name:                  n.Name,
+		Status:                n.Status,
+		StatusMessage:         n.StatusMessage,
+		Role:                  n.Role,
+		CpuCapacity:           n.CPUCapacity,
+		MemoryCapacity:        n.MemoryCapacity,
+		CpuAllocatable:        n.CPUAllocatable,
+		MemoryAllocatable:     n.MemoryAllocatable,
+		PodCapacity:           n.PodCapacity,
+		PodCount:              n.PodCount,
+		CpuRequests:           n.CPURequests,
+		MemoryRequests:        n.MemoryRequests,
+		CpuRequestsPercent:    n.CPURequestsPercent,
+		MemoryRequestsPercent: n.MemoryRequestsPercent,
+		PodsPercent:           n.PodsPercent,
+		KubeletVersion:        n.KubeletVersion,
+		Unschedulable:         n.Unschedulable,
+		PressureConditions:    n.PressureConditions,
+		CreatedAt:             createdAt,
+	}
+}
+
+// ClusterNamespaceToProto converts a live Kubernetes namespace.
+func ClusterNamespaceToProto(n kubernetes.ClusterNamespace) *idpv1.ClusterNamespace {
+	return &idpv1.ClusterNamespace{
+		Name:        n.Name,
+		Phase:       n.Phase,
+		CreatedAt:   n.CreatedAt.Format(time.RFC3339),
+		Labels:      n.Labels,
+		Managed:     n.Managed,
+		Kind:        n.Kind,
+		DisplayName: n.DisplayName,
+	}
+}
+
+// NamespaceInventoryToProto converts a namespace resource tree.
+func NamespaceInventoryToProto(inv *kubernetes.NamespaceInventory) *idpv1.GetNamespaceResourcesResponse {
+	groups := make([]*idpv1.ResourceGroup, 0, len(inv.Groups))
+	for _, g := range inv.Groups {
+		items := make([]*idpv1.NamespaceResource, 0, len(g.Items))
+		for _, item := range g.Items {
+			items = append(items, &idpv1.NamespaceResource{
+				Kind:      item.Kind,
+				Name:      item.Name,
+				Status:    item.Status,
+				Detail:    item.Detail,
+				CreatedAt: item.CreatedAt.Format(time.RFC3339),
+			})
+		}
+		groups = append(groups, &idpv1.ResourceGroup{Name: g.Name, Items: items})
+	}
+	return &idpv1.GetNamespaceResourcesResponse{
+		Namespace:      ClusterNamespaceToProto(inv.Namespace),
+		Groups:         groups,
+		TotalResources: inv.TotalResources,
 	}
 }
 
@@ -281,5 +386,28 @@ func ResourceMetricsToProto(m *kubernetes.ResourceMetrics) *idpv1.GetResourceMet
 		MemoryRequests:     m.MemoryRequests,
 		MemoryCapacity:     m.MemoryCapacity,
 		MemoryUsagePercent: m.MemoryUsagePercent,
+	}
+}
+
+// ManagedClusterToProto converts a fleet row. kubeconfig is never copied.
+func ManagedClusterToProto(row *db.Cluster, connected bool) *idpv1.ManagedCluster {
+	if row == nil {
+		return nil
+	}
+	return &idpv1.ManagedCluster{
+		Id:                uuidToString(row.ID),
+		Name:              row.Name,
+		DisplayName:       row.DisplayName,
+		Provider:          row.Provider,
+		Status:            row.Status,
+		Active:            row.IsActive,
+		Connected:         connected,
+		ServerUrl:         derefString(row.ServerUrl),
+		KubernetesVersion: derefString(row.KubernetesVersion),
+		NodeCount:         row.NodeCount,
+		LastError:         derefString(row.LastError),
+		CreatedBy:         row.CreatedBy,
+		CreatedAt:         timestamptzToString(row.CreatedAt),
+		UpdatedAt:         timestamptzToString(row.UpdatedAt),
 	}
 }

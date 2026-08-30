@@ -184,10 +184,21 @@ export function isBuildActive(status: string): boolean {
   return status === 'pending' || status === 'running';
 }
 
+/** Where Kaniko Jobs run unless the server overrides `build.namespace`. */
+export const DEFAULT_BUILD_NAMESPACE = 'idp-builds';
+
 /** Kubernetes Job name for a build; pods are named `{job}-{suffix}`. */
 export function buildJobName(repositoryName: string, number: number): string {
   const name = `build-${repositoryName}-${number}`;
   if (name.length <= 63) return name;
   const suffix = `-${number}`;
   return name.slice(0, 63 - suffix.length) + suffix;
+}
+
+/** Job controller names pods `{job}-{hash}`; a bare Job name is accepted too. */
+export function matchBuildPodName(podNames: string[], jobName: string): string {
+  const job = jobName.trim();
+  if (!job) return '';
+  const prefix = job + '-';
+  return podNames.find((name) => name === job || name.startsWith(prefix)) ?? '';
 }

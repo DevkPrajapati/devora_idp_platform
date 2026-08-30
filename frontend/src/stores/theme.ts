@@ -7,7 +7,7 @@ function createThemeStore() {
     ? (localStorage.getItem('idp-theme') as Theme | null)
     : null;
 
-  const { subscribe, set, update } = writable<Theme>(stored ?? 'system');
+  const { subscribe, set, update } = writable<Theme>(stored ?? 'dark');
 
   function applyTheme(theme: Theme) {
     const root = document.documentElement;
@@ -37,7 +37,7 @@ function createThemeStore() {
       });
     },
     init: () => {
-      const theme = stored ?? 'system';
+      const theme = stored ?? 'dark';
       applyTheme(theme);
     },
   };

@@ -1,6 +1,7 @@
 package kubernetes
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -70,6 +71,30 @@ func TestParseLogLineTrimsCarriageReturn(t *testing.T) {
 	}
 }
 
+func TestParseLogLineStripsANSI(t *testing.T) {
+	line := ParseLogLine("p", "2026-07-28T10:15:00Z \x1b[37mDEBU\x1b[0m Running: npm install")
+	if strings.Contains(line.Message, "[") || strings.Contains(line.Message, "\x1b") {
+		t.Errorf("ANSI survived: %q", line.Message)
+	}
+	if !strings.Contains(line.Message, "DEBU") || !strings.Contains(line.Message, "npm install") {
+		t.Errorf("Message = %q", line.Message)
+	}
+
+	orphan := ParseLogLine("p", "[37mDEBU [0m Running: npm install")
+	if strings.Contains(orphan.Message, "[37m") || strings.Contains(orphan.Message, "[0m") {
+		t.Errorf("orphan SGR survived: %q", orphan.Message)
+	}
+}
+
+func TestIsTransientLogStreamError(t *testing.T) {
+	if !isTransientLogStreamError(fmt.Errorf("read log stream: unexpected EOF")) {
+		t.Error("unexpected EOF should retry")
+	}
+	if isTransientLogStreamError(fmt.Errorf("pods \"x\" not found")) {
+		t.Error("not found must not look transient")
+	}
+}
+
 func TestLooksLikeTimestamp(t *testing.T) {
 	valid := []string{
 		"2026-07-28T10:15:00Z",
@@ -95,6 +120,26 @@ func TestLooksLikeTimestamp(t *testing.T) {
 		if looksLikeTimestamp(token) {
 			t.Errorf("looksLikeTimestamp(%q) = true, want false", token)
 		}
+	}
+}
+
+func TestIsWaitingForLogs(t *testing.T) {
+	waiting := []string{
+		`open log stream: container "api" in pod "api-x" is waiting to start: CrashLoopBackOff`,
+		`waiting to start: ContainerCreating`,
+		`PodInitializing`,
+		`container not found`,
+	}
+	for _, msg := range waiting {
+		if !isWaitingForLogs(fmt.Errorf("%s", msg)) {
+			t.Errorf("isWaitingForLogs(%q) = false", msg)
+		}
+	}
+	if isWaitingForLogs(fmt.Errorf("connection refused")) {
+		t.Error("transport errors must not look like a waiting container")
+	}
+	if isWaitingForLogs(nil) {
+		t.Error("nil must not be waiting")
 	}
 }
 

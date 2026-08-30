@@ -1,14 +1,10 @@
 <script lang="ts">
+  import { chartBarClass } from '$lib/status';
   /**
    * Horizontal bars for magnitude across nominal categories.
    *
-   * Every bar carries the same hue on purpose. Shading each bar
-   * darker-where-bigger would double-encode length as lightness and burn the
-   * only free channel on information the bar length already shows.
-   *
-   * Horizontal rather than vertical because the categories here are long
-   * strings (Kubernetes event reasons), which would otherwise need rotated
-   * tick labels.
+   * Status-like labels (Running, Failed, Pending) get semantic colours so a
+   * healthy bar is green and a failed bar is red. Other categories stay neutral.
    */
   interface Datum {
     label: string;
@@ -47,7 +43,7 @@
         </div>
         <div class="h-1.5 w-full rounded-full bg-muted">
           <div
-            class="h-full rounded-full bg-primary"
+            class="h-full rounded-full {chartBarClass(d.label)}"
             style="width: {(d.value / max) * 100}%"
           ></div>
         </div>

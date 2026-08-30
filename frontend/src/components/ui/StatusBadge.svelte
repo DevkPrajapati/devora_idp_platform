@@ -18,7 +18,7 @@
   );
 </script>
 
-<span class={cn('inline-flex items-center gap-1.5 text-sm font-medium', healthStatusColor(status), className)}>
+<span class={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-sm font-medium', healthStatusColor(status), className)}>
   <span class={cn('h-2 w-2 rounded-full', dotColor)}></span>
   {healthStatusLabel(status)}
 </span>

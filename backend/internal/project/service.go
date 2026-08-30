@@ -12,21 +12,32 @@ import (
 	"github.com/idp/platform/backend/internal/auth"
 	idpv1 "github.com/idp/platform/backend/internal/gen/idp/v1"
 	"github.com/idp/platform/backend/internal/keycloak"
+	"github.com/idp/platform/backend/internal/kubernetes"
 	"github.com/idp/platform/backend/internal/pkg/convert"
 	"github.com/idp/platform/backend/internal/pkg/pagination"
 	"github.com/idp/platform/backend/internal/repository"
+	"github.com/jackc/pgx/v5/pgtype"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 var slugRegex = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 type Service struct {
 	repo     *repository.ProjectRepository
+	nsRepo   *repository.NamespaceRepository
+	k8s      *kubernetes.Client
 	audit    *audit.Service
 	keycloak *keycloak.Admin
 }
 
-func NewService(repo *repository.ProjectRepository, auditSvc *audit.Service, kc *keycloak.Admin) *Service {
-	return &Service{repo: repo, audit: auditSvc, keycloak: kc}
+func NewService(
+	repo *repository.ProjectRepository,
+	nsRepo *repository.NamespaceRepository,
+	k8s *kubernetes.Client,
+	auditSvc *audit.Service,
+	kc *keycloak.Admin,
+) *Service {
+	return &Service{repo: repo, nsRepo: nsRepo, k8s: k8s, audit: auditSvc, keycloak: kc}
 }
 
 func (s *Service) Create(ctx context.Context, req *idpv1.CreateProjectRequest) (*idpv1.CreateProjectResponse, error) {
@@ -160,10 +171,9 @@ func (s *Service) Delete(ctx context.Context, req *idpv1.DeleteProjectRequest) (
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, errors.New("project not found"))
 	}
-	nsCount, _ := s.repo.CountNamespaces(ctx, row.ID)
-	if nsCount > 0 {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("cannot delete project with %d active namespaces", nsCount))
+	if err := s.releaseNamespaces(ctx, row.ID); err != nil {
+		s.audit.RecordFromUser(ctx, "project.delete", "", req.Slug, "project", "failure", map[string]any{"error": err.Error()})
+		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	if err := s.repo.Delete(ctx, req.Slug); err != nil {
 		s.audit.RecordFromUser(ctx, "project.delete", "", req.Slug, "project", "failure", map[string]any{"error": err.Error()})
@@ -171,6 +181,31 @@ func (s *Service) Delete(ctx context.Context, req *idpv1.DeleteProjectRequest) (
 	}
 	s.audit.RecordFromUser(ctx, "project.delete", "", req.Slug, "project", "success", nil)
 	return &idpv1.DeleteProjectResponse{}, nil
+}
+
+// releaseNamespaces unbinds the project's namespaces from the platform so the
+// project row can be deleted. Kubernetes delete is best-effort: a disconnected
+// cluster must not block an admin from removing a project.
+func (s *Service) releaseNamespaces(ctx context.Context, projectID pgtype.UUID) error {
+	if s.nsRepo == nil {
+		return nil
+	}
+	nss, err := s.nsRepo.ListByProject(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	for i := range nss {
+		name := nss[i].Name
+		if s.k8s.Available() {
+			if err := s.k8s.DeleteNamespace(ctx, name); err != nil && !apierrors.IsNotFound(err) {
+				// Keep going: the IDP record is the source of truth for the console.
+			}
+		}
+		if err := s.nsRepo.MarkDeleted(ctx, name); err != nil {
+			return fmt.Errorf("detach namespace %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) AddMember(ctx context.Context, req *idpv1.AddMemberRequest) (*idpv1.AddMemberResponse, error) {

@@ -4,10 +4,11 @@
   import Login from '$routes/Login.svelte';
   import { queryClient } from '$lib/query-client';
   import { theme } from '$stores/theme';
-  import { router } from '$stores/router';
+  import { router, type Route } from '$stores/router';
   import { auth } from '$stores/auth';
   import { QueryClientProvider } from '@tanstack/svelte-query';
   import { onMount } from 'svelte';
+  import Skeleton from '$components/ui/Skeleton.svelte';
 
   const routeLoaders: Record<string, () => Promise<{ default: Component }>> = {
     '/': () => import('$routes/Dashboard.svelte'),
@@ -23,6 +24,7 @@
     '/monitoring': () => import('$routes/Monitoring.svelte'),
     '/audit': () => import('$routes/AuditLog.svelte'),
     '/rbac': () => import('$routes/Rbac.svelte'),
+    '/clusters': () => import('$routes/Clusters.svelte'),
     '/settings': () => import('$routes/Settings.svelte'),
   };
 
@@ -36,24 +38,25 @@
 
   $effect(() => {
     const path = $router;
-    const loader = routeLoaders[path] ?? routeLoaders['/'];
+    let active = true;
     pageLoading = true;
-    let cancelled = false;
-    loader()
-      .then((mod) => {
-        if (!cancelled) {
-          page = mod.default;
-          pageLoading = false;
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          page = null;
-          pageLoading = false;
-        }
-      });
+
+    void (async () => {
+      try {
+        const loader = routeLoaders[path] ?? routeLoaders['/'];
+        const mod = await loader();
+        if (!active) return;
+        page = mod.default;
+      } catch {
+        if (!active) return;
+        page = null;
+      } finally {
+        if (active) pageLoading = false;
+      }
+    })();
+
     return () => {
-      cancelled = true;
+      active = false;
     };
   });
 
@@ -64,7 +67,9 @@
       const url = new URL(a.href);
       if (url.origin === window.location.origin) {
         e.preventDefault();
-        router.navigate(url.pathname as any);
+        const nextPath = url.pathname as Route;
+        const query = Object.fromEntries(url.searchParams.entries());
+        router.navigate(nextPath, Object.keys(query).length > 0 ? query : undefined);
       }
     }
   }
@@ -83,9 +88,10 @@
     {:else}
       <AppLayout>
         {#if pageLoading}
-          <div class="flex h-48 items-center justify-center text-sm text-muted-foreground">Loading page…</div>
+          <Skeleton variant="page" />
         {:else if page}
-          <svelte:component this={page} />
+          {@const Page = page}
+          <Page />
         {:else}
           <div class="p-8 text-sm text-destructive">Failed to load this page.</div>
         {/if}

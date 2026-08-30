@@ -83,7 +83,7 @@ describe('openWorkload', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(`${API_BASE}/api/app-access/ticket`);
     expect(JSON.parse(init.body)).toEqual({ namespace: 'demo', name: 'web' });
-    expect(replace).toHaveBeenCalledWith(`${API_BASE}/apps/demo/web?ticket=abc`);
+    expect(replace).toHaveBeenCalledWith('http://localhost:8090/apps/demo/web?ticket=abc');
   });
 
   // Regression guard: the tab must be opened synchronously inside the click

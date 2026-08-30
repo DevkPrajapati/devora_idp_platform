@@ -29,6 +29,9 @@
     Table2,
     Upload,
   } from '@lucide/svelte';
+  import PageHeader from '$components/ui/PageHeader.svelte';
+  import Skeleton from '$components/ui/Skeleton.svelte';
+  import Pagination from '$components/ui/Pagination.svelte';
   import { router } from '$stores/router';
 
   let selectedNamespace = $state('');
@@ -52,19 +55,22 @@
 
   $effect(() => {
     // Re-read query whenever the router lands on this page (including
-    // client-side navigations from Deployments).
-    void $router;
-    if (typeof window === 'undefined') return;
-    const params = new URLSearchParams(window.location.search);
-    const ns = params.get('ns') ?? '';
-    const name = params.get('name') ?? '';
-    if (ns) selectedNamespace = ns;
-    if (name) {
-      focusNamespace = ns;
-      focusName = name;
-      selectedTable = null;
-      pageSkip = 0;
-    }
+    // client-side navigations from Deployments). `$router` is illegal in
+    // runes mode here, so subscribe explicitly.
+    const unsub = router.subscribe(() => {
+      if (typeof window === 'undefined') return;
+      const params = new URLSearchParams(window.location.search);
+      const ns = params.get('ns') ?? '';
+      const name = params.get('name') ?? '';
+      if (ns) selectedNamespace = ns;
+      if (name) {
+        focusNamespace = ns;
+        focusName = name;
+        selectedTable = null;
+        pageSkip = 0;
+      }
+    });
+    return unsub;
   });
 
   const listQuery = createQuery(() => ({
@@ -233,14 +239,11 @@
   }
 </script>
 
-<div class="space-y-6">
-  <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-tight">Databases</h1>
-      <p class="mt-1 text-sm text-muted-foreground">
-        Browse MongoDB, PostgreSQL, and MySQL workloads discovered in the cluster — no CLI needed.
-      </p>
-    </div>
+<div class="page-stack">
+  <PageHeader
+    title="Databases"
+    description="Browse MongoDB, PostgreSQL, and MySQL workloads discovered in the cluster — no CLI needed."
+  >
 
     <div class="flex flex-wrap items-center gap-3">
       <div class="flex min-w-0 items-center gap-2">
@@ -272,13 +275,10 @@
         <RefreshCw class="h-4 w-4" />
       </button>
     </div>
-  </div>
+  </PageHeader>
 
   {#if listQuery.isPending}
-    <div class="flex items-center justify-center p-16 text-muted-foreground">
-      <RefreshCw class="mr-2 h-5 w-5 animate-spin" />
-      Discovering databases…
-    </div>
+    <Skeleton variant="cards" rows={4} />
   {:else if listQuery.isError}
     <div class="flex flex-col items-center justify-center rounded-lg border border-dashed border-border p-16 text-center">
       <AlertCircle class="mb-4 h-12 w-12 text-destructive/60" />
@@ -340,35 +340,14 @@
               {/each}
             </div>
 
-            <div class="mt-4 flex items-center justify-between text-xs text-muted-foreground">
-              <span>
-                Showing {pageSkip + 1}–{pageSkip + (docsQuery.data?.returned ?? 0)}
-                {#if docsQuery.data?.truncated}
-                  (more available)
-                {/if}
-              </span>
-              <div class="flex gap-2">
-                <button
-                  type="button"
-                  disabled={pageSkip === 0}
-                  onclick={() => {
-                    pageSkip = Math.max(0, pageSkip - pageSize);
-                  }}
-                  class="rounded-md border border-input px-2.5 py-1 disabled:opacity-40"
-                >
-                  Previous
-                </button>
-                <button
-                  type="button"
-                  disabled={!docsQuery.data?.truncated}
-                  onclick={() => {
-                    pageSkip = pageSkip + pageSize;
-                  }}
-                  class="rounded-md border border-input px-2.5 py-1 disabled:opacity-40"
-                >
-                  Next
-                </button>
-              </div>
+            <div class="mt-4">
+              <Pagination
+                hasPrev={pageSkip > 0}
+                hasNext={!!docsQuery.data?.truncated}
+                summary="Showing {pageSkip + 1}–{pageSkip + (docsQuery.data?.returned ?? 0)}{docsQuery.data?.truncated ? ' (more available)' : ''}"
+                onprev={() => { pageSkip = Math.max(0, pageSkip - pageSize); }}
+                onnext={() => { pageSkip = pageSkip + pageSize; }}
+              />
             </div>
           {/if}
         </CardContent>

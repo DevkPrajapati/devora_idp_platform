@@ -28,17 +28,22 @@ func (c *Client) ExecInPod(
 	command []string,
 	stdin []byte,
 ) (*ExecResult, error) {
-	if c == nil || c.Clientset == nil || c.Config == nil {
-		return nil, fmt.Errorf("kubernetes cluster not connected")
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	baseCfg, csErr := c.restConfig()
+	if csErr != nil {
+		return nil, csErr
 	}
 	if len(command) == 0 {
 		return nil, fmt.Errorf("command is required")
 	}
 
-	cfg := rest.CopyConfig(c.Config)
+	cfg := rest.CopyConfig(baseCfg)
 	cfg.Timeout = 0
 
-	req := c.Clientset.CoreV1().RESTClient().Post().
+	req := cs.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
 		Namespace(namespace).

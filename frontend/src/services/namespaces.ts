@@ -14,6 +14,26 @@ export interface Namespace {
   updatedAt: string;
   /** Slug of the owning project; empty or absent when unattached. */
   projectSlug?: string;
+  /**
+   * Whether the namespace still exists in the connected cluster.
+   *
+   * Only meaningful when `clusterChecked` is true. A registered namespace can
+   * disappear from the cluster without the platform being told — deleted with
+   * kubectl, or lost with a cluster that was rebuilt — and every drill-down on
+   * such a row can only fail, so it is marked rather than presented as healthy.
+   */
+  existsInCluster?: boolean;
+  /** Whether presence could be determined at all. False when disconnected. */
+  clusterChecked?: boolean;
+}
+
+/**
+ * Reports a namespace whose platform record no longer matches the cluster.
+ * Distinct from "unknown": with no cluster connected nothing can be verified,
+ * and claiming the namespace is missing would be wrong.
+ */
+export function isMissingFromCluster(ns: Namespace): boolean {
+  return ns.clusterChecked === true && ns.existsInCluster !== true;
 }
 
 export interface ListNamespacesResponse {

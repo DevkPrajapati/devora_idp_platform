@@ -42,6 +42,24 @@ type Build struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
+type Cluster struct {
+	ID                  pgtype.UUID        `json:"id"`
+	Name                string             `json:"name"`
+	DisplayName         string             `json:"display_name"`
+	Provider            string             `json:"provider"`
+	Status              string             `json:"status"`
+	KubeconfigEncrypted []byte             `json:"kubeconfig_encrypted"`
+	ServerUrl           *string            `json:"server_url"`
+	KubernetesVersion   *string            `json:"kubernetes_version"`
+	NodeCount           int32              `json:"node_count"`
+	IsActive            bool               `json:"is_active"`
+	LastError           *string            `json:"last_error"`
+	CreatedBy           string             `json:"created_by"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	ClusterUid          *string            `json:"cluster_uid"`
+}
+
 type GitRepository struct {
 	ID                     pgtype.UUID        `json:"id"`
 	ProjectID              pgtype.UUID        `json:"project_id"`
@@ -76,6 +94,7 @@ type Namespace struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	ProjectID   pgtype.UUID        `json:"project_id"`
+	ClusterUid  *string            `json:"cluster_uid"`
 }
 
 type Project struct {

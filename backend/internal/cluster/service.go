@@ -7,36 +7,93 @@ import (
 	"strings"
 
 	"connectrpc.com/connect"
+	"github.com/idp/platform/backend/internal/audit"
+	"github.com/idp/platform/backend/internal/config"
 	idpv1 "github.com/idp/platform/backend/internal/gen/idp/v1"
 	"github.com/idp/platform/backend/internal/kubernetes"
 	"github.com/idp/platform/backend/internal/pkg/convert"
+	"github.com/idp/platform/backend/internal/pkg/secretbox"
+	"github.com/idp/platform/backend/internal/repository"
+	"go.uber.org/zap"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
-// Service handles cluster overview business logic.
+// Service handles cluster overview and fleet lifecycle.
 type Service struct {
-	k8s *kubernetes.Client
+	k8s         *kubernetes.Client
+	hub         *kubernetes.Hub
+	repo        *repository.ClusterRepository
+	box         *secretbox.Box
+	provisioner *kubernetes.Provisioner
+	audit       *audit.Service
+	logger      *zap.Logger
+	k8sCfg      config.KubernetesConfig
+	logs        *clusterLogHub
+	state       StateReconciler
+	watch       *watcher
+	capacity    *capacityWatch
+	jobs        jobSet
 }
 
-// NewService creates a cluster service.
+// NewService creates a cluster service. Fleet fields may be nil in tests that
+// only exercise overview/log RPCs.
 func NewService(k8s *kubernetes.Client) *Service {
-	return &Service{k8s: k8s}
+	return &Service{k8s: k8s, provisioner: kubernetes.NewProvisioner(), logs: newClusterLogHub()}
+}
+
+// FleetOptions wires the admin cluster lifecycle.
+type FleetOptions struct {
+	Hub         *kubernetes.Hub
+	Repo        *repository.ClusterRepository
+	Box         *secretbox.Box
+	Provisioner *kubernetes.Provisioner
+	Audit       *audit.Service
+	Logger      *zap.Logger
+	Config      config.KubernetesConfig
+	// State retires platform records that belonged to a cluster which has since
+	// been rebuilt. Optional; when nil, identity changes are logged only.
+	State StateReconciler
+}
+
+// WithFleet attaches fleet dependencies. Called from server wiring so tests
+// that construct NewService(k8s) keep compiling.
+func (s *Service) WithFleet(opts FleetOptions) *Service {
+	s.hub = opts.Hub
+	s.repo = opts.Repo
+	s.box = opts.Box
+	if opts.Provisioner != nil {
+		s.provisioner = opts.Provisioner
+	}
+	s.audit = opts.Audit
+	s.logger = opts.Logger
+	s.k8sCfg = opts.Config
+	s.state = opts.State
+	if s.hub != nil && s.k8s == nil {
+		s.k8s = s.hub.Live()
+	}
+	return s
+}
+
+func (s *Service) disconnectedOverview() *idpv1.GetOverviewResponse {
+	return &idpv1.GetOverviewResponse{
+		ClusterName: "disconnected",
+		Connected:   false,
+	}
+}
+
+func (s *Service) live() bool {
+	return s.k8s != nil && s.k8s.Available()
 }
 
 // GetOverview returns cluster statistics.
 func (s *Service) GetOverview(ctx context.Context, _ *idpv1.GetOverviewRequest) (*idpv1.GetOverviewResponse, error) {
-	if s.k8s == nil {
-		return &idpv1.GetOverviewResponse{
-			ClusterName: "disconnected",
-			Connected:   false,
-		}, nil
+	if !s.live() {
+		return s.disconnectedOverview(), nil
 	}
 
 	overview, err := s.k8s.GetOverview(ctx)
 	if err != nil {
-		return &idpv1.GetOverviewResponse{
-			ClusterName: "disconnected",
-			Connected:   false,
-		}, nil
+		return s.disconnectedOverview(), nil
 	}
 
 	return convert.ClusterOverviewToProto(overview), nil
@@ -44,8 +101,8 @@ func (s *Service) GetOverview(ctx context.Context, _ *idpv1.GetOverviewRequest) 
 
 // ListEvents returns recent cluster events.
 func (s *Service) ListEvents(ctx context.Context, req *idpv1.ListEventsRequest) (*idpv1.ListEventsResponse, error) {
-	if s.k8s == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
+	if !s.live() {
+		return &idpv1.ListEventsResponse{}, nil
 	}
 
 	events, err := s.k8s.ListEvents(ctx, req.Namespace, req.Limit)
@@ -63,11 +120,11 @@ func (s *Service) ListEvents(ctx context.Context, req *idpv1.ListEventsRequest) 
 
 // ListPods returns the list of pods.
 func (s *Service) ListPods(ctx context.Context, req *idpv1.ListPodsRequest) (*idpv1.ListPodsResponse, error) {
-	if s.k8s == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
+	if !s.live() {
+		return &idpv1.ListPodsResponse{}, nil
 	}
 
-	pods, err := s.k8s.ListPods(ctx, req.Namespace)
+	pods, err := s.k8s.ListPods(ctx, req.Namespace, req.App)
 	if err != nil {
 		return nil, kubernetes.ConnectError(err)
 	}
@@ -82,8 +139,8 @@ func (s *Service) ListPods(ctx context.Context, req *idpv1.ListPodsRequest) (*id
 
 // ListServices returns the list of services.
 func (s *Service) ListServices(ctx context.Context, req *idpv1.ListServicesRequest) (*idpv1.ListServicesResponse, error) {
-	if s.k8s == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
+	if !s.live() {
+		return &idpv1.ListServicesResponse{}, nil
 	}
 
 	svcs, err := s.k8s.ListServices(ctx, req.Namespace)
@@ -101,7 +158,7 @@ func (s *Service) ListServices(ctx context.Context, req *idpv1.ListServicesReque
 
 // GetPodLogs returns container logs for a pod.
 func (s *Service) GetPodLogs(ctx context.Context, req *idpv1.GetPodLogsRequest) (*idpv1.GetPodLogsResponse, error) {
-	if s.k8s == nil {
+	if !s.live() {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
 	}
 	if req.Namespace == "" || req.PodName == "" {
@@ -127,7 +184,7 @@ func (s *Service) StreamPodLogs(
 	req *idpv1.StreamPodLogsRequest,
 	emit func(*idpv1.LogLine) error,
 ) error {
-	if s.k8s == nil {
+	if !s.live() {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
 	}
 	if strings.TrimSpace(req.Namespace) == "" || strings.TrimSpace(req.PodName) == "" {
@@ -160,8 +217,8 @@ func (s *Service) StreamPodLogs(
 
 // ListNodes returns cluster nodes.
 func (s *Service) ListNodes(ctx context.Context, _ *idpv1.ListNodesRequest) (*idpv1.ListNodesResponse, error) {
-	if s.k8s == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
+	if !s.live() {
+		return &idpv1.ListNodesResponse{}, nil
 	}
 
 	nodes, err := s.k8s.ListNodes(ctx)
@@ -179,8 +236,8 @@ func (s *Service) ListNodes(ctx context.Context, _ *idpv1.ListNodesRequest) (*id
 
 // GetResourceMetrics returns cluster resource utilization.
 func (s *Service) GetResourceMetrics(ctx context.Context, _ *idpv1.GetResourceMetricsRequest) (*idpv1.GetResourceMetricsResponse, error) {
-	if s.k8s == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
+	if !s.live() {
+		return &idpv1.GetResourceMetricsResponse{}, nil
 	}
 
 	metrics, err := s.k8s.GetResourceMetrics(ctx)
@@ -197,7 +254,7 @@ func (s *Service) GetResourceMetrics(ctx context.Context, _ *idpv1.GetResourceMe
 // Separate from GetResourceMetrics because the sampler is not an RPC caller:
 // it wants two numbers, not a protobuf message wrapped in a connect.Error.
 func (s *Service) ResourceUsage(ctx context.Context) (int32, int32, error) {
-	if s.k8s == nil {
+	if !s.live() {
 		return 0, 0, errors.New("kubernetes cluster not connected")
 	}
 
@@ -207,4 +264,41 @@ func (s *Service) ResourceUsage(ctx context.Context) (int32, int32, error) {
 	}
 
 	return metrics.CPUUsagePercent, metrics.MemoryUsagePercent, nil
+}
+
+// ListClusterNamespaces returns every namespace the API server currently has.
+func (s *Service) ListClusterNamespaces(ctx context.Context, _ *idpv1.ListClusterNamespacesRequest) (*idpv1.ListClusterNamespacesResponse, error) {
+	if !s.live() {
+		return &idpv1.ListClusterNamespacesResponse{}, nil
+	}
+
+	namespaces, err := s.k8s.ListClusterNamespaces(ctx)
+	if err != nil {
+		return nil, kubernetes.ConnectError(err)
+	}
+
+	result := make([]*idpv1.ClusterNamespace, 0, len(namespaces))
+	for _, ns := range namespaces {
+		result = append(result, convert.ClusterNamespaceToProto(ns))
+	}
+	return &idpv1.ListClusterNamespacesResponse{Namespaces: result}, nil
+}
+
+// GetNamespaceResources returns the live resource tree for one namespace.
+func (s *Service) GetNamespaceResources(ctx context.Context, req *idpv1.GetNamespaceResourcesRequest) (*idpv1.GetNamespaceResourcesResponse, error) {
+	if !s.live() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("name is required"))
+	}
+
+	inv, err := s.k8s.GetNamespaceResources(ctx, req.Name)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("namespace %s not found", req.Name))
+		}
+		return nil, kubernetes.ConnectError(err)
+	}
+	return convert.NamespaceInventoryToProto(inv), nil
 }

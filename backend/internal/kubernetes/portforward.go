@@ -43,18 +43,23 @@ func (c *Client) PortForwardPod(
 	namespace, podName string,
 	remotePort int32,
 ) (*ForwardedPort, error) {
-	if c == nil || c.Clientset == nil || c.Config == nil {
-		return nil, fmt.Errorf("kubernetes cluster not connected")
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	baseCfg, csErr := c.restConfig()
+	if csErr != nil {
+		return nil, csErr
 	}
 	if remotePort <= 0 {
 		return nil, fmt.Errorf("remote port must be positive")
 	}
 
-	cfg := rest.CopyConfig(c.Config)
+	cfg := rest.CopyConfig(baseCfg)
 	// Ordinary API calls use a short Timeout; a live port-forward must not.
 	cfg.Timeout = 0
 
-	req := c.Clientset.CoreV1().RESTClient().Post().
+	req := cs.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Namespace(namespace).
 		Name(podName).

@@ -13,6 +13,7 @@
     listStorageClasses,
   } from '$services/storage';
   import { createQuery } from '@tanstack/svelte-query';
+  import PageHeader from '$components/ui/PageHeader.svelte';
   import {
     Database,
     HardDrive,
@@ -106,15 +107,11 @@
   }
 </script>
 
-<div class="space-y-6">
-  <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-tight">PVC Storage</h1>
-      <p class="mt-1 text-sm text-muted-foreground">
-        Persistent volume claims, backing volumes, provisioner classes, and per-node container
-        runtime and image footprint.
-      </p>
-    </div>
+<div class="page-stack">
+  <PageHeader
+    title="PVC Storage"
+    description="Persistent volume claims, backing volumes, provisioner classes, and per-node container runtime and image footprint."
+  >
 
     <button
       onclick={refreshAll}
@@ -123,7 +120,7 @@
     >
       <RefreshCw class="h-4 w-4" />
     </button>
-  </div>
+  </PageHeader>
 
   {#if overviewQuery.data && !overviewQuery.data.connected}
     <Card class="border-amber-500/30 bg-amber-500/5">

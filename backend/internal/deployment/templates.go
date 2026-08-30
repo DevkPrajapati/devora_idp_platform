@@ -47,6 +47,7 @@ var deploymentTemplates = []*idpv1.DeploymentTemplate{
 		Rationale: "Node is single-threaded per process, so 500m CPU is ample; " +
 			"replicas rather than cores provide throughput. 256Mi suits a typical " +
 			"Express app with a modest dependency tree.",
+		Autoscaling: &idpv1.Autoscaling{MinReplicas: 2, MaxReplicas: 6, CpuAverageUtilization: 70},
 	},
 	{
 		Id:          "react-app",
@@ -70,6 +71,7 @@ var deploymentTemplates = []*idpv1.DeploymentTemplate{
 		Rationale: "Serving pre-built assets is nearly free. Runtime config must " +
 			"be injected at build time or through a served config file — a SPA " +
 			"cannot read container environment variables.",
+		Autoscaling: &idpv1.Autoscaling{MinReplicas: 2, MaxReplicas: 8, CpuAverageUtilization: 70},
 	},
 	{
 		Id:          "go-api",
@@ -97,6 +99,7 @@ var deploymentTemplates = []*idpv1.DeploymentTemplate{
 		Rationale: "Go binaries start in milliseconds, so probe delays are short. " +
 			"The runtime scales across cores, hence the higher CPU limit; 128Mi " +
 			"is generous for a service without a large in-memory cache.",
+		Autoscaling: &idpv1.Autoscaling{MinReplicas: 2, MaxReplicas: 8, CpuAverageUtilization: 70},
 	},
 	{
 		Id:          "python-fastapi",
@@ -125,6 +128,7 @@ var deploymentTemplates = []*idpv1.DeploymentTemplate{
 		Rationale: "PYTHONUNBUFFERED is set because CPython buffers stdout when it " +
 			"is a pipe, which makes container logs appear only in bursts. Import " +
 			"time is slow, so the readiness delay is longer than Go's.",
+		Autoscaling: &idpv1.Autoscaling{MinReplicas: 2, MaxReplicas: 6, CpuAverageUtilization: 70},
 	},
 	{
 		Id:          "spring-boot",

@@ -88,9 +88,9 @@ type CORSConfig struct {
 type KubernetesConfig struct {
 	Kubeconfig string
 	InCluster  bool
-	// RequestTimeout caps each Kubernetes API call (default 5s).
+	// RequestTimeout caps each Kubernetes API call (default 15s).
 	RequestTimeout time.Duration
-	// DialTimeout caps TCP connect time (default 3s).
+	// DialTimeout caps TCP connect time (default 5s).
 	DialTimeout time.Duration
 	// IngressEnabled controls automatic Ingress creation. Turn it off on
 	// clusters with no ingress controller, where every generated Ingress would
@@ -275,8 +275,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.admin_client_secret", "idp-backend-dev-secret")
 
 	v.SetDefault("kubernetes.in_cluster", false)
-	v.SetDefault("kubernetes.request_timeout", 5*time.Second)
-	v.SetDefault("kubernetes.dial_timeout", 3*time.Second)
+	// A cluster-wide list (every pod, every namespace) on a local single-node
+	// cluster regularly needs more than five seconds, and more still while the
+	// kubelet is under load. The five-second default cut those calls off and
+	// surfaced them as "cluster unavailable", even though the cluster was only
+	// slow. The client's own fallback already used 15s; this default was the
+	// reason that fallback never applied.
+	v.SetDefault("kubernetes.request_timeout", 15*time.Second)
+	v.SetDefault("kubernetes.dial_timeout", 5*time.Second)
 
 	v.SetDefault("build.enabled", true)
 	v.SetDefault("build.namespace", "idp-builds")

@@ -27,8 +27,15 @@ export default defineConfig({
         rewrite: (p) => p.replace(/^\/rpc/, ''),
         // Live log streams (Connect server-streaming) must not be cut by the
         // default proxy idle timeout.
-        timeout: 0,
-        proxyTimeout: 0,
+        timeout: 24 * 60 * 60 * 1000,
+        proxyTimeout: 24 * 60 * 60 * 1000,
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            // Stop intermediaries from buffering Connect server-streams (live logs).
+            proxyRes.headers['cache-control'] = 'no-cache, no-transform';
+            proxyRes.headers['x-accel-buffering'] = 'no';
+          });
+        },
       },
     },
   },

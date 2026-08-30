@@ -44,6 +44,7 @@ type DeploymentSpec struct {
 	// the container. Used for database data directories.
 	PersistentVolumeClaim string
 	MountPath             string
+	Autoscaling           AutoscalingSpec
 }
 
 // DeploymentInfo holds deployment status information.
@@ -74,10 +75,15 @@ type DeploymentInfo struct {
 	IngressHost      string
 	URL              string
 	CreatedAt        time.Time
+	Autoscaling      AutoscalingSpec
 }
 
 // CreateDeployment creates a new deployment in the specified namespace.
 func (c *Client) CreateDeployment(ctx context.Context, spec DeploymentSpec) (*DeploymentInfo, error) {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
 	replicas := spec.Replicas
 	if replicas <= 0 {
 		replicas = 1
@@ -151,7 +157,7 @@ func (c *Client) CreateDeployment(ctx context.Context, spec DeploymentSpec) (*De
 	// backs off for minutes before the corrected spec is retried.
 	applyImagePullSecrets(deployment, spec.ImagePullSecrets)
 
-	created, err := c.Clientset.AppsV1().Deployments(spec.Namespace).Create(ctx, deployment, metav1.CreateOptions{})
+	created, err := cs.AppsV1().Deployments(spec.Namespace).Create(ctx, deployment, metav1.CreateOptions{})
 	if err != nil {
 		// Otherwise a failed create (duplicate name, quota) leaves a ConfigMap
 		// and Secret behind that nothing owns and nothing will clean up.
@@ -162,9 +168,17 @@ func (c *Client) CreateDeployment(ctx context.Context, spec DeploymentSpec) (*De
 		return nil, fmt.Errorf("create deployment: %w", err)
 	}
 
+	if spec.Autoscaling.Enabled() {
+		if err := c.ApplyAutoscaling(ctx, spec.Namespace, spec.Name, spec.Autoscaling); err != nil {
+			_ = c.DeleteDeployment(ctx, spec.Namespace, spec.Name)
+			return nil, err
+		}
+	}
+
 	info := toDeploymentInfo(created)
 	info.EnvVars = copyMap(spec.ConfigVars)
 	info.SecretKeys = sortedKeys(spec.SecretVars)
+	info.Autoscaling = spec.Autoscaling
 	return info, nil
 }
 
@@ -179,7 +193,11 @@ func sortedKeys(m map[string]string) []string {
 
 // GetDeployment retrieves a deployment by name.
 func (c *Client) GetDeployment(ctx context.Context, namespace, name string) (*DeploymentInfo, error) {
-	deployment, err := c.Clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	deployment, err := cs.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("get deployment: %w", err)
 	}
@@ -219,11 +237,16 @@ func (c *Client) EnrichDeployment(ctx context.Context, info *DeploymentInfo) {
 	if info.Status != "Running" {
 		info.StatusReason = c.podStatusReason(ctx, info.Namespace, info.Name)
 	}
+	info.Autoscaling = c.GetAutoscaling(ctx, info.Namespace, info.Name)
 }
 
 // ListDeployments lists deployments in a namespace.
 func (c *Client) ListDeployments(ctx context.Context, namespace string) ([]DeploymentInfo, error) {
-	list, err := c.Clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	list, err := cs.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "idp.platform/managed=true",
 	})
 	if err != nil {
@@ -241,13 +264,17 @@ func (c *Client) ListDeployments(ctx context.Context, namespace string) ([]Deplo
 
 // ScaleDeployment updates the replica count.
 func (c *Client) ScaleDeployment(ctx context.Context, namespace, name string, replicas int32) (*DeploymentInfo, error) {
-	deployment, err := c.Clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	deployment, err := cs.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("get deployment: %w", err)
 	}
 
 	deployment.Spec.Replicas = &replicas
-	updated, err := c.Clientset.AppsV1().Deployments(namespace).Update(ctx, deployment, metav1.UpdateOptions{})
+	updated, err := cs.AppsV1().Deployments(namespace).Update(ctx, deployment, metav1.UpdateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("scale deployment: %w", err)
 	}
@@ -256,7 +283,11 @@ func (c *Client) ScaleDeployment(ctx context.Context, namespace, name string, re
 
 // RestartDeployment triggers a rolling restart.
 func (c *Client) RestartDeployment(ctx context.Context, namespace, name string) (*DeploymentInfo, error) {
-	deployment, err := c.Clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	deployment, err := cs.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("get deployment: %w", err)
 	}
@@ -266,7 +297,7 @@ func (c *Client) RestartDeployment(ctx context.Context, namespace, name string) 
 	}
 	deployment.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = time.Now().Format(time.RFC3339)
 
-	updated, err := c.Clientset.AppsV1().Deployments(namespace).Update(ctx, deployment, metav1.UpdateOptions{})
+	updated, err := cs.AppsV1().Deployments(namespace).Update(ctx, deployment, metav1.UpdateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("restart deployment: %w", err)
 	}
@@ -275,10 +306,15 @@ func (c *Client) RestartDeployment(ctx context.Context, namespace, name string) 
 
 // DeleteDeployment removes a deployment.
 func (c *Client) DeleteDeployment(ctx context.Context, namespace, name string) error {
-	err := c.Clientset.AppsV1().Deployments(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
+	err := cs.AppsV1().Deployments(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil {
 		return fmt.Errorf("delete deployment: %w", err)
 	}
+	_ = c.ApplyAutoscaling(ctx, namespace, name, AutoscalingSpec{})
 	return nil
 }
 
@@ -330,8 +366,12 @@ func toDeploymentInfo(d *appsv1.Deployment) *DeploymentInfo {
 // crash-looping pod is almost always the error that killed it. Failures are
 // swallowed: this is diagnostic detail, never a reason to fail the request.
 func (c *Client) lastLogLine(ctx context.Context, namespace, pod string) string {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return ""
+	}
 	tail := int64(10)
-	stream, err := c.Clientset.CoreV1().Pods(namespace).
+	stream, err := cs.CoreV1().Pods(namespace).
 		GetLogs(pod, &corev1.PodLogOptions{TailLines: &tail}).Stream(ctx)
 	if err != nil {
 		return ""
@@ -360,7 +400,11 @@ func (c *Client) lastLogLine(ctx context.Context, namespace, pod string) string 
 // express this: it is accepted by the API server long before any image is
 // pulled, so a broken image otherwise looks like a healthy deployment.
 func (c *Client) podStatusReason(ctx context.Context, namespace, name string) string {
-	pods, err := c.Clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return ""
+	}
+	pods, err := cs.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "app=" + name,
 	})
 	if err != nil || len(pods.Items) == 0 {
@@ -437,11 +481,12 @@ func (c *Client) AttachPVCToDeployment(
 	ctx context.Context,
 	namespace, name, pvcName, mountPath string,
 ) (patched bool, err error) {
-	if c == nil || c.Clientset == nil {
-		return false, fmt.Errorf("kubernetes cluster not connected")
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return false, csErr
 	}
 
-	deployment, err := c.Clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	deployment, err := cs.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return false, fmt.Errorf("get deployment: %w", err)
 	}
@@ -474,7 +519,7 @@ func (c *Client) AttachPVCToDeployment(
 	}
 	deployment.Spec.Template.Annotations["idp.platform/persistence"] = time.Now().UTC().Format(time.RFC3339)
 
-	if _, err := c.Clientset.AppsV1().Deployments(namespace).Update(ctx, deployment, metav1.UpdateOptions{}); err != nil {
+	if _, err := cs.AppsV1().Deployments(namespace).Update(ctx, deployment, metav1.UpdateOptions{}); err != nil {
 		return false, fmt.Errorf("update deployment: %w", err)
 	}
 	return true, nil

@@ -62,6 +62,27 @@ export function emptyResources(): ResourceLimits {
   return { cpuRequest: '', cpuLimit: '', memoryRequest: '', memoryLimit: '' };
 }
 
+export interface Autoscaling {
+  minReplicas: number;
+  maxReplicas: number;
+  cpuAverageUtilization: number;
+  memoryAverageUtilization: number;
+}
+
+export function emptyAutoscaling(): Autoscaling {
+  return { minReplicas: 1, maxReplicas: 0, cpuAverageUtilization: 70, memoryAverageUtilization: 0 };
+}
+
+function toAutoscaling(a: any): Autoscaling | null {
+  if (!a || !a.maxReplicas) return null;
+  return {
+    minReplicas: a.minReplicas ?? 1,
+    maxReplicas: a.maxReplicas ?? 0,
+    cpuAverageUtilization: a.cpuAverageUtilization ?? 70,
+    memoryAverageUtilization: a.memoryAverageUtilization ?? 0,
+  };
+}
+
 /** A golden path: reviewed defaults for a known stack. */
 export interface DeploymentTemplate {
   id: string;
@@ -78,6 +99,7 @@ export interface DeploymentTemplate {
   suggestedSecretKeys: string[];
   exampleImage: string;
   rationale: string;
+  autoscaling: Autoscaling | null;
 }
 
 export async function listDeploymentTemplates(): Promise<DeploymentTemplate[]> {
@@ -106,6 +128,7 @@ export async function listDeploymentTemplates(): Promise<DeploymentTemplate[]> {
     suggestedSecretKeys: t.suggestedSecretKeys || [],
     exampleImage: t.exampleImage || '',
     rationale: t.rationale || '',
+    autoscaling: toAutoscaling(t.autoscaling),
   }));
 }
 
@@ -198,6 +221,8 @@ export interface Deployment {
   /** null when the workload has no such probe configured. */
   readinessProbe: Probe | null;
   livenessProbe: Probe | null;
+  resources?: ResourceLimits;
+  autoscaling: Autoscaling | null;
   createdAt: string;
 }
 
@@ -245,6 +270,15 @@ export async function listDeployments(namespace: string, page = 1, pageSize = 20
       ingressHost: d.ingressHost || '',
       readinessProbe: toProbe(d.readinessProbe),
       livenessProbe: toProbe(d.livenessProbe),
+      resources: d.resources
+        ? {
+            cpuRequest: d.resources.cpuRequest || '',
+            cpuLimit: d.resources.cpuLimit || '',
+            memoryRequest: d.resources.memoryRequest || '',
+            memoryLimit: d.resources.memoryLimit || '',
+          }
+        : emptyResources(),
+      autoscaling: toAutoscaling(d.autoscaling),
       createdAt: d.createdAt || '',
     })),
     pageInfo: data.pageInfo,
@@ -279,6 +313,7 @@ export interface CreateDeploymentInput {
   disablePersistence?: boolean;
   /** PVC size, e.g. "5Gi". */
   storageSize?: string;
+  autoscaling?: Autoscaling | null;
 }
 
 export async function createDeployment(input: CreateDeploymentInput): Promise<{ deployment: Deployment }> {
@@ -301,6 +336,7 @@ export async function createDeployment(input: CreateDeploymentInput): Promise<{ 
     persistent: input.persistent ?? false,
     disablePersistence: input.disablePersistence ?? false,
     storageSize: input.storageSize ?? '',
+    autoscaling: input.autoscaling ?? null,
   });
 
   if (!response.ok) {
@@ -363,12 +399,14 @@ export async function updateDeploymentConfig(input: {
 export async function scaleDeployment(
   namespace: string,
   name: string,
-  replicas: number
+  replicas: number,
+  autoscaling?: Autoscaling | null,
 ): Promise<{ deployment: Deployment }> {
   const response = await apiFetch('/idp.v1.DeploymentService/ScaleDeployment', {
     namespace,
     name,
     replicas,
+    autoscaling: autoscaling ?? null,
   });
 
   if (!response.ok) {

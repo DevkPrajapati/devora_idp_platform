@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>DEVORA — LinkedIn Video Script (Step by Step)</title>
+<style>
+  @page { size: A4; margin: 14mm 14mm 16mm 14mm; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #111827;
+    font-size: 12.5px;
+    line-height: 1.45;
+    background: #fff;
+  }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.03em; }
+  h2 { font-size: 16px; margin: 0 0 8px; color: #0f172a; }
+  h3 { font-size: 13px; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: .06em; color: #334155; }
+  p { margin: 0 0 8px; }
+  .muted { color: #64748b; }
+  .hi { color: #b45309; font-size: 11.5px; }
+  .cover {
+    min-height: 250mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 12mm 8mm;
+    page-break-after: always;
+  }
+  .badge {
+    display: inline-block;
+    background: #0f172a;
+    color: #fff;
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    padding: 5px 10px;
+    border-radius: 4px;
+    margin-bottom: 16px;
+  }
+  .cover h1 { font-size: 34px; }
+  .cover .sub { font-size: 16px; color: #334155; margin-bottom: 28px; }
+  .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; max-width: 420px; }
+  .meta b { display: block; font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: .06em; }
+  .scene {
+    page-break-before: always;
+    page-break-inside: avoid;
+  }
+  .scene.allow-break { page-break-inside: auto; }
+  .head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    border-bottom: 3px solid #0f172a;
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+  }
+  .clock {
+    flex-shrink: 0;
+    background: #0f172a;
+    color: #fff;
+    border-radius: 8px;
+    padding: 8px 12px;
+    text-align: right;
+    min-width: 128px;
+  }
+  .clock .t { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .clock .d { font-size: 11px; opacity: .8; }
+  .tag {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 3px;
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  .tag.speak { background: #dcfce7; color: #166534; }
+  .tag.click { background: #dbeafe; color: #1e40af; }
+  .tag.type { background: #ffedd5; color: #9a3412; }
+  .tag.wait { background: #f3e8ff; color: #6b21a8; }
+  .box {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin: 8px 0;
+  }
+  .box.speak { background: #f0fdf4; border-color: #bbf7d0; }
+  .box.click { background: #eff6ff; border-color: #bfdbfe; }
+  .box.type { background: #fff7ed; border-color: #fed7aa; }
+  .box.note { background: #f8fafc; }
+  .script {
+    font-size: 14.5px;
+    line-height: 1.55;
+    font-weight: 500;
+  }
+  .script em { font-style: normal; color: #0369a1; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0 10px; }
+  th, td { border: 1px solid #e5e7eb; padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: #0f172a; color: #fff; font-weight: 600; font-size: 11px; letter-spacing: .04em; }
+  td.req { color: #b91c1c; font-weight: 700; width: 52px; }
+  td.val { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; background: #fffbeb; }
+  .tl { width: 100%; }
+  .tl td:nth-child(1) { width: 88px; font-variant-numeric: tabular-nums; font-weight: 700; }
+  .tl td:nth-child(2) { width: 130px; }
+  .tl td:nth-child(3) { width: 70px; text-align: center; }
+  .cheat li { margin-bottom: 6px; }
+  .warn {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin: 10px 0;
+    color: #991b1b;
+  }
+  ul.tight { margin: 4px 0 8px 18px; padding: 0; }
+  ul.tight li { margin: 2px 0; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .footer-note { font-size: 11px; color: #64748b; margin-top: 10px; }
+  .big-num { font-size: 28px; font-weight: 800; letter-spacing: -0.04em; }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<section class="cover">
+  <div class="badge">Private recording script · not for posting</div>
+  <h1>DEVORA</h1>
+  <p class="sub">LinkedIn video — step by step. What to click. What to type. What to say. How long on each page.</p>
+  <div class="meta">
+    <div><b>Product</b>DEVORA — Internal Developer Platform</div>
+    <div><b>Video length</b>About 9 to 10 minutes</div>
+    <div><b>Language</b>Easy spoken English</div>
+    <div><b>Demo app</b>hello-web · nginx:alpine</div>
+  </div>
+  <div class="box note" style="margin-top:28px;max-width:560px">
+    <p><strong>How to use this PDF</strong></p>
+    <ul class="tight">
+      <li>Print it, or keep it on a second screen / phone.</li>
+      <li>Green box = <strong>speak</strong> these words.</li>
+      <li>Blue box = <strong>click</strong> with the mouse.</li>
+      <li>Orange box = <strong>type</strong> this exact value.</li>
+      <li>Do not read the Hindi lines. They are only for you.</li>
+      <li>If you forget a word, keep going. Small mistakes are fine.</li>
+    </ul>
+  </div>
+  <p class="footer-note">Speak slower than you think. After every 2 lines, take a small breath.</p>
+</section>
+
+<!-- BEFORE YOU RECORD -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>0 · Before you press Record</h2>
+      <p class="muted">Do this once. Then the video stays smooth.</p>
+    </div>
+    <div class="clock"><div class="t">Prep</div><div class="d">not on camera</div></div>
+  </div>
+
+  <div class="warn">
+    Do not say your password out loud. Type it. Stay silent for 2 seconds.
+  </div>
+
+  <h3>Ready the app</h3>
+  <ul class="tight">
+    <li>Open DEVORA in Chrome. Dark theme. Zoom 110%.</li>
+    <li>Hide bookmarks. Full screen the browser.</li>
+    <li>Make sure a Kubernetes cluster is already <strong>running and active</strong> (Kind or Minikube). Creating a cluster live takes too long for LinkedIn.</li>
+    <li>Login page should be visible when you start. Log out if you are already in.</li>
+  </ul>
+
+  <h3>Values you will type in the video (learn these)</h3>
+  <table>
+    <tr><th>Where</th><th>Field</th><th>Type this</th></tr>
+    <tr><td>Login</td><td>Username</td><td class="val">admin</td></tr>
+    <tr><td>Login</td><td>Password</td><td class="val">•••••• (do not speak)</td></tr>
+    <tr><td>Projects</td><td>Slug</td><td class="val">demo-app</td></tr>
+    <tr><td>Projects</td><td>Display name</td><td class="val">Demo App</td></tr>
+    <tr><td>Namespaces</td><td>Namespace Name</td><td class="val">demo-app</td></tr>
+    <tr><td>Namespaces</td><td>Display Name</td><td class="val">Demo App</td></tr>
+    <tr><td>Deploy</td><td>Deployment Name</td><td class="val">hello-web</td></tr>
+    <tr><td>Deploy</td><td>Initial Replicas</td><td class="val">2</td></tr>
+    <tr><td>Deploy</td><td>Container Image</td><td class="val">nginx:alpine</td></tr>
+    <tr><td>Deploy</td><td>Container Port</td><td class="val">80</td></tr>
+    <tr><td>Deploy</td><td>Exposure</td><td class="val">NodePort</td></tr>
+    <tr><td>Deploy · config</td><td>Key / Value</td><td class="val">LOG_LEVEL &nbsp; info</td></tr>
+  </table>
+
+  <h3>How to talk so it does not sound like a script</h3>
+  <ul class="tight">
+    <li>Look at the screen, not at this paper, when you click.</li>
+    <li>Look at the camera only at the start and the end (if you show your face).</li>
+    <li>You may say “okay”, “so”, “now” — that sounds human.</li>
+    <li>Record 2 takes. Keep the calm one, not the “perfect English” one.</li>
+  </ul>
+</section>
+
+<!-- TIMELINE -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>Full clock — keep this page next to you</h2>
+      <p class="muted">If you go 10 seconds over on one page, cut 10 seconds from the next page. Total target: 9:30.</p>
+    </div>
+    <div class="clock"><div class="t">0:00–9:30</div><div class="d">full video</div></div>
+  </div>
+  <table class="tl">
+    <tr><th>Clock</th><th>Page</th><th>Speak</th><th>What happens</th></tr>
+    <tr><td>0:00–0:15</td><td>Face / logo</td><td>15s</td><td>Hook. Name the product.</td></tr>
+    <tr><td>0:15–0:40</td><td>Login</td><td>25s</td><td>Type username. Sign in.</td></tr>
+    <tr><td>0:40–1:20</td><td>Dashboard</td><td>40s</td><td>Show live cluster health.</td></tr>
+    <tr><td>1:20–2:00</td><td>Clusters</td><td>40s</td><td>Show fleet. Open create form. Do not wait for create.</td></tr>
+    <tr><td>2:00–2:40</td><td>Projects</td><td>40s</td><td>Create project. 3 fields.</td></tr>
+    <tr><td>2:40–3:25</td><td>Namespaces</td><td>45s</td><td>Create namespace. Attach to project.</td></tr>
+    <tr><td>3:25–3:50</td><td>Registry</td><td>25s</td><td>Explain only. Skip save unless you use a private image.</td></tr>
+    <tr><td>3:50–6:20</td><td>Deployments</td><td>2m 30s</td><td>MAIN SCENE. Fill the form. Deploy nginx.</td></tr>
+    <tr><td>6:20–7:00</td><td>Deploy result</td><td>40s</td><td>Logs, scale, running pods.</td></tr>
+    <tr><td>7:00–7:50</td><td>Builds</td><td>50s</td><td>Git → Kaniko → registry. Open form, do not start a long build.</td></tr>
+    <tr><td>7:50–8:10</td><td>Services</td><td>20s</td><td>Show ClusterIP / NodePort.</td></tr>
+    <tr><td>8:10–8:30</td><td>Workloads</td><td>20s</td><td>Show the hello-web pods.</td></tr>
+    <tr><td>8:30–8:50</td><td>Databases</td><td>20s</td><td>Browse Mongo / Postgres / MySQL.</td></tr>
+    <tr><td>8:50–9:05</td><td>Storage</td><td>15s</td><td>PVCs and volumes.</td></tr>
+    <tr><td>9:05–9:20</td><td>Monitoring</td><td>15s</td><td>CPU, memory, nodes.</td></tr>
+    <tr><td>9:20–9:40</td><td>Audit + RBAC</td><td>20s</td><td>Who did what. Roles.</td></tr>
+    <tr><td>9:40–9:55</td><td>Close</td><td>15s</td><td>Ask for feedback. Smile.</td></tr>
+  </table>
+  <p class="hi">Hindi: ye clock hai. Login pe 25 second. Deploy form pe 2.5 minute. Baaki pages short.</p>
+</section>
+
+<!-- SCENE 1 HOOK -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>1 · Hook (face or logo)</h2>
+      <p class="muted">Smile. Speak to one friend, not to a hall.</p>
+    </div>
+    <div class="clock"><div class="t">0:00–0:15</div><div class="d">15 seconds</div></div>
+  </div>
+  <div class="box click"><span class="tag click">Show</span> Your face, or the DEVORA logo. No UI yet.</div>
+  <div class="box speak">
+    <span class="tag speak">Say this</span>
+    <p class="script">
+      Hey everyone.<br />
+      I built <em>DEVORA</em>.<br />
+      It is an Internal Developer Platform for Kubernetes.<br />
+      Developers can deploy apps from a UI… not from long YAML files.<br />
+      Let me show you.
+    </p>
+    <p class="hi">Matlab: maine DEVORA banaya. Developers UI se app deploy kar sakte hain. YAML ki lambi files nahi.</p>
+  </div>
+  <p><strong>How:</strong> Pause after “DEVORA”. Say it slow: <em>de-VOR-ah</em>. Then start screen recording.</p>
+</section>
+
+<!-- SCENE 2 LOGIN -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>2 · Login page</h2>
+      <p class="muted">You have 25 seconds. Fill the form. Do not lecture.</p>
+    </div>
+    <div class="clock"><div class="t">0:15–0:40</div><div class="d">25 seconds</div></div>
+  </div>
+
+  <div class="box click">
+    <span class="tag click">Do this</span>
+    <ol>
+      <li>Point at the left side: logo, “Infrastructure, without the wait.”</li>
+      <li>Click the Username box. Type <code>admin</code>.</li>
+      <li>Click Password. Type the password. Stay quiet.</li>
+      <li>Click the green <strong>Sign in</strong> button.</li>
+      <li>Wait for Dashboard. Do not talk over the loading spinner.</li>
+    </ol>
+  </div>
+
+  <h3>Form fields</h3>
+  <table>
+    <tr><th>Field on screen</th><th>Must fill?</th><th>Type this</th><th>Why</th></tr>
+    <tr><td>Username</td><td class="req">YES</td><td class="val">admin</td><td>Platform login (Keycloak).</td></tr>
+    <tr><td>Password</td><td class="req">YES</td><td class="val">(silent)</td><td>Never say it in the video.</td></tr>
+  </table>
+  <p class="muted">Other demo users exist (developer / viewer) but use <strong>admin</strong> so every page is allowed.</p>
+
+  <div class="box speak">
+    <span class="tag speak">Say this (while you type)</span>
+    <p class="script">
+      This is the login page.<br />
+      On the left, you can see what DEVORA does. Clusters. Deploy. Access control.<br />
+      Login is not a fake form. It goes to Keycloak.<br />
+      So every user has a real role. Admin. Developer. Or viewer.<br />
+      I will sign in as admin.
+    </p>
+    <p class="hi">Matlab: ye asli login hai Keycloak se. Role ke hisaab se permission milti hai.</p>
+  </div>
+  <p><strong>Timing:</strong> 0–8s talk about left panel. 8–18s type. 18–25s click Sign in and wait.</p>
+</section>
+
+<!-- SCENE 3 DASHBOARD -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>3 · Dashboard</h2>
+      <p class="muted">Move the mouse slowly over cards. Do not click around fast.</p>
+    </div>
+    <div class="clock"><div class="t">0:40–1:20</div><div class="d">40 seconds</div></div>
+  </div>
+  <div class="box click">
+    <span class="tag click">Do this</span>
+    Hover: cluster name → pod count → CPU meter → memory meter → recent pods. Do not open other pages yet.
+  </div>
+  <div class="box speak">
+    <span class="tag speak">Say this</span>
+    <p class="script">
+      This is the dashboard.<br />
+      It is live. Not a screenshot.<br />
+      Here I can see the cluster name. How many pods are running. How many nodes are ready.<br />
+      CPU and memory… right here.<br />
+      If something is wrong in the cluster, I see it on this page first.
+    </p>
+    <p class="hi">Matlab: dashboard live hai. Cluster health, pods, CPU, memory yahin dikhta hai.</p>
+  </div>
+</section>
+
+<!-- SCENE 4 CLUSTERS -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>4 · Clusters</h2>
+      <p class="muted">Open the create form. Fill it. Then Cancel. Do not wait 3 minutes for Kind.</p>
+    </div>
+    <div class="clock"><div class="t">1:20–2:00</div><div class="d">40 seconds</div></div>
+  </div>
+  <div class="box click">
+    <span class="tag click">Do this</span>
+    Sidebar → <strong>Clusters</strong> → point at the running cluster → click <strong>New Cluster</strong> → fill the form below → click <strong>Cancel</strong> (or close). Then say “I already have one running.”
+  </div>
+
+  <h3>Create Cluster form — fields</h3>
+  <table>
+    <tr><th>Field</th><th>Must?</th><th>Demo value</th><th>What to say in one line</th></tr>
+    <tr><td>Provider (Kind / Minikube / Import)</td><td class="req">YES</td><td class="val">Kind</td><td>Kind is local Kubernetes on Docker.</td></tr>
+    <tr><td>Name</td><td class="req">YES</td><td class="val">team-prod</td><td>Short name. Lowercase. Hyphens ok.</td></tr>
+    <tr><td>Display name</td><td>no</td><td class="val">Production</td><td>Nice name for humans.</td></tr>
+    <tr><td>Kubernetes version</td><td>no</td><td class="val">v1.31.0</td><td>Optional. Blank is fine.</td></tr>
+    <tr><td>Worker nodes (Kind only)</td><td>no</td><td class="val">1</td><td>How many extra nodes.</td></tr>
+    <tr><td>Kubeconfig YAML (Import only)</td><td>if Import</td><td class="val">— skip —</td><td>Paste an existing cluster config. Stored encrypted.</td></tr>
+    <tr><td>Activate when ready</td><td>no</td><td class="val">checked</td><td>This cluster becomes the live one.</td></tr>
+  </table>
+
+  <div class="box speak">
+    <span class="tag speak">Say this</span>
+    <p class="script">
+      This page is for the fleet.<br />
+      An admin can create a cluster from the UI. Kind, Minikube, or import kubeconfig.<br />
+      The active cluster is the one every other page talks to.<br />
+      I will not create a new one now… because it takes a few minutes.<br />
+      This one is already running. So we can deploy on it.
+    </p>
+    <p class="hi">Matlab: cluster UI se banta hai. Active cluster par hi baaki pages kaam karte hain. Naya cluster ab nahi banaenge kyunki time lagta hai.</p>
+  </div>
+</section>
+
+<!-- SCENE 5 PROJECTS -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>5 · Projects — create one live</h2>
+      <p class="muted">This form is short. Fill all 3 fields. Click Create. Wait for the row.</p>
+    </div>
+    <div class="clock"><div class="t">2:00–2:40</div><div class="d">40 seconds</div></div>
+  </div>
+  <div class="box click">
+    <span class="tag click">Do this</span>
+    Sidebar → <strong>Projects</strong> → <strong>New Project</strong> → type the 3 fields → <strong>Create</strong>.
+  </div>
+  <table>
+    <tr><th>Field</th><th>Must?</th><th>Type this</th><th>Rule</th></tr>
+    <tr><td>Slug</td><td class="req">YES</td><td class="val">demo-app</td><td>Only a–z, 0–9, hyphen. This is the ID.</td></tr>
+    <tr><td>Display name</td><td>no</td><td class="val">Demo App</td><td>Pretty name.</td></tr>
+    <tr><td>Description</td><td>no</td><td class="val">Demo project for the video</td><td>Optional. Still type it. Looks real.</td></tr>
+  </table>
+  <div class="box speak">
+    <span class="tag speak">Say this</span>
+    <p class="script">
+      A project is a workspace for a team.<br />
+      It owns namespaces, registry credentials, and git repos.<br />
+      Slug is the ID. It must be lowercase.<br />
+      Display name is what people read.<br />
+      I click Create.
+    </p>
+    <p class="hi">Matlab: project ek team ka box hai. Namespace aur registry isi ke andar aate hain.</p>
+  </div>
+  <p class="muted">If the project already exists from a practice take, just open it and say “I already created this project.” Then go to Namespaces.</p>
+</section>
+
+<!-- SCENE 6 NAMESPACES -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>6 · Namespaces — create one live</h2>
+      <p class="muted">This is the Kubernetes namespace. Apps will run inside it.</p>
+    </div>
+    <div class="clock"><div class="t">2:40–3:25</div><div class="d">45 seconds</div></div>
+  </div>
+  <div class="box click">
+    <span class="tag click">Do this</span>
+    Sidebar → <strong>Namespaces</strong> → <strong>New Namespace</strong> (or Create) → fill fields → Create. Then click the new row once so people see the resource tree.
+  </div>
+  <table>
+    <tr><th>Field</th><th>Must?</th><th>Type this</th><th>Rule</th></tr>
+    <tr><td>Namespace Name</td><td class="req">YES</td><td class="val">demo-app</td><td>Kubernetes name. lowercase, hyphens.</td></tr>
+    <tr><td>Display Name</td><td>no</td><td class="val">Demo App</td><td>Human name.</td></tr>
+    <tr><td>Description</td><td>no</td><td class="val">Namespace for the hello-web demo</td><td>Optional.</td></tr>
+    <tr><td>Owner Labels</td><td>no</td><td class="val">team=demo,env=dev</td><td>Comma list. key=value.</td></tr>
+    <tr><td>Annotations</td><td>no</td><td class="val">(leave blank)</td><td>Skip to save time.</td></tr>
+  </table>
+  <div class="box speak">
+    <span class="tag speak">Say this</span>
+    <p class="script">
+      A namespace is a box inside Kubernetes.<br />
+      Each team can have their own.<br />
+      The name must follow Kubernetes rules. Lowercase. No spaces.<br />
+      Labels help us find who owns it.<br />
+      After I create it, DEVORA can show every resource inside. Pods, services, config maps.
+    </p>
+    <p class="hi">Matlab: namespace Kubernetes ka alag room hai. App isi ke andar chalega.</p>
+  </div>
+</section>
+
+<!-- SCENE 7 REGISTRY -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>7 · Registry — explain, do not save</h2>
+      <p class="muted">nginx:alpine is public. You do not need credentials for this demo.</p>
+    </div>
+    <div class="clock"><div class="t">3:25–3:50</div><div class="d">25 seconds</div></div>
+  </div>
+  <div class="box click">
+    <span class="tag click">Do this</span>
+    Sidebar → <strong>Registry</strong> → click <strong>Add credential</strong> → show the form → close without saving.
+  </div>
+  <table>
+    <tr><th>Field</th><th>Must?</th><th>Example</th><th>One-line meaning</th></tr>
+    <tr><td>Preset buttons</td><td>no</td><td class="val">Docker Hub</td><td>Fills the URL for you.</td></tr>
+    <tr><td>Credential Name</td><td class="req">YES</td><td class="val">dockerhub</td><td>Becomes a Kubernetes secret.</td></tr>
+    <tr><td>Registry URL</td><td class="req">YES</td><td class="val">docker.io</td><td>Where images live.</td></tr>
+    <tr><td>Username</td><td class="req">YES</td><td class="val">your-user</td><td>Registry user.</td></tr>
+    <tr><td>Password / Access Token</td><td class="req">YES</td><td class="val">(token)</td><td>Use a token. Not your real password on camera.</td></tr>
+    <tr><td>Email</td><td>no</td><td class="val">—</td><td>Optional.</td></tr>
+  </table>
+  <p class="muted">Presets on screen: Docker Hub, GitHub (ghcr.io), GitLab, Amazon ECR, Azure ACR, Google GCR, Other.</p>
+  <div class="box speak">
+    <span class="tag speak">Say this</span>
+    <p class="script">
+      If the image is private, you add registry credentials here.<br />
+      DEVORA encrypts them. Then it creates a pull secret in your namespaces.<br />
+      Today I will deploy nginx from Docker Hub. That image is public.<br />
+      So I can skip this step.
+    </p>
+    <p class="hi">Matlab: private image ho to yahan login save karte hain. nginx public hai, isliye skip.</p>
+  </div>
+</section>
+
+<!-- SCENE 8 DEPLOY - THE MAIN SCENE -->
+<section class="scene allow-break">
+  <div class="head">
+    <div>
+      <h2>8 · Deployments — THIS IS THE MAIN SCENE</h2>
+      <p class="muted">Slow down. This is the part people remember. 2 minutes 30 seconds.</p>
+    </div>
+    <div class="clock"><div class="t">3:50–6:20</div><div class="d">2 min 30 sec</div></div>
+  </div>
+
+  <div class="box click">
+    <span class="tag click">Do this first</span>
+    Sidebar → <strong>Deployments</strong> → pick namespace <code>demo-app</code> in the dropdown → click <strong>New Deployment</strong>.
+  </div>
+
+  <div class="box speak">
+    <span class="tag speak">Say this as the form opens</span>
+    <p class="script">
+      Now the important part. I will deploy a real app.<br />
+      A small website. Name: hello-web. Image: nginx.<br />
+      I will fill the form field by field… so you can see what a developer actually types.
+    </p>
+    <p class="hi">Matlab: ab asli deploy. Form ke har field ko dheere dheere bharenge.</p>
+  </div>
+
+  <h3>A · Templates (10 seconds) — click, then clear</h3>
+  <p>Templates on screen: Node.js API · React App · Go API · Python FastAPI · Spring Boot · MongoDB · PostgreSQL · MySQL</p>
+  <div class="box click">Click <strong>Node.js API</strong> so the form fills. Pause 2 seconds. Then click <strong>Clear</strong>.</div>
+  <div class="box speak">
+    <p class="script">
+      These are golden paths. Ready-made settings for common stacks.<br />
+      If I pick Node.js, it fills port, CPU, memory, and health checks.<br />
+      For this demo I will clear it… and type everything myself. So you see each field.
+    </p>
+    <p class="hi">Matlab: template ready settings deti hai. Demo ke liye clear karke khud type karenge.</p>
+  </div>
+
+  <h3>B · Required fields — type these in order</h3>
+  <table>
+    <tr><th>#</th><th>Field on screen</th><th>Must?</th><th>Type this</th><th>Say this while typing</th></tr>
+    <tr>
+      <td>1</td><td>Deployment Name</td><td class="req">YES</td><td class="val">hello-web</td>
+      <td>This becomes the Kubernetes deployment name. Lowercase. No spaces.</td>
+    </tr>
+    <tr>
+      <td>2</td><td>Initial Replicas</td><td class="req">YES</td><td class="val">2</td>
+      <td>Two copies of the app. If one pod dies, the other still runs.</td>
+    </tr>
+    <tr>
+      <td>3</td><td>Container Image</td><td class="req">YES</td><td class="val">nginx:alpine</td>
+      <td>This is the Docker image. nginx is a web server. alpine is a small tag.</td>
+    </tr>
+    <tr>
+      <td>4</td><td>Container Port</td><td class="req">YES</td><td class="val">80</td>
+      <td>The port inside the container. nginx listens on 80.</td>
+    </tr>
+    <tr>
+      <td>5</td><td>Exposure</td><td class="req">YES</td><td class="val">NodePort</td>
+      <td>NodePort means we can reach it from outside the cluster. ClusterIP is only inside.</td>
+    </tr>
+  </table>
+  <p class="hi">Bolte time: name, replicas, image, port, exposure. Har field ke baad ek saans lo.</p>
+
+  <h3>C · Config Variables (15 seconds)</h3>
+  <div class="box click">Click <strong>+ Add</strong> under Config Variables. Type key then value.</div>
+  <table>
+    <tr><th>Field</th><th>Must?</th><th>Type this</th></tr>
+    <tr><td>Key</td><td>no</td><td class="val">LOG_LEVEL</td></tr>
+    <tr><td>Value</td><td>no</td><td class="val">info</td></tr>
+  </table>
+  <div class="box speak">
+    <p class="script">
+      Config variables are not secrets.<br />
+      Things like LOG_LEVEL or NODE_ENV.<br />
+      DEVORA stores them in a ConfigMap.
+    </p>
+  </div>
+
+  <h3>D · Secret Variables (15 seconds) — show, do not add a real password</h3>
+  <div class="box speak">
+    <p class="script">
+      Secrets are different. Passwords. API keys.<br />
+      They go into a Kubernetes Secret. The UI will not show them again.<br />
+      nginx does not need a secret. So I leave this empty.
+    </p>
+    <p class="hi">Matlab: password yahan daalte hain, lekin nginx ko zaroorat nahi.</p>
+  </div>
+
+  <h3>E · Routing &amp; Health Checks (30 seconds) — open the section</h3>
+  <div class="box click">Click <strong>Routing &amp; Health Checks</strong> so it opens. Fill only what is in the table. Leave the rest blank.</div>
+  <table>
+    <tr><th>Field</th><th>Must?</th><th>Demo</th><th>Say this</th></tr>
+    <tr><td>Custom Hostname</td><td>no</td><td class="val">(blank)</td><td>If I leave this blank, DEVORA makes a default host name.</td></tr>
+    <tr><td>Internal only (checkbox)</td><td>no</td><td class="val">unchecked</td><td>Leave unchecked so it can create an Ingress.</td></tr>
+    <tr><td>CPU request</td><td>no</td><td class="val">100m</td><td>One tenth of a CPU. Enough for nginx.</td></tr>
+    <tr><td>CPU limit</td><td>no</td><td class="val">250m</td><td>It cannot use more than this.</td></tr>
+    <tr><td>Memory request</td><td>no</td><td class="val">64Mi</td><td>How much RAM we ask the node for.</td></tr>
+    <tr><td>Memory limit</td><td>no</td><td class="val">128Mi</td><td>If it goes above this, Kubernetes can kill it.</td></tr>
+    <tr><td>Scale automatically</td><td>no</td><td class="val">off</td><td>HPA. Skip for a first demo.</td></tr>
+    <tr><td>Readiness Probe path</td><td>no</td><td class="val">/</td><td>If this path works, the pod can take traffic.</td></tr>
+    <tr><td>Liveness Probe path</td><td>no</td><td class="val">(blank)</td><td>I leave liveness blank. A bad probe can restart a healthy app.</td></tr>
+  </table>
+
+  <h3>F · Submit (10 seconds)</h3>
+  <div class="box click">Scroll to the bottom. Click the primary button (Create / Deploy). Do not click away.</div>
+  <div class="box speak">
+    <p class="script">
+      I click create.<br />
+      Behind this button, DEVORA talks to Kubernetes.<br />
+      It creates the Deployment, the Service, and the config.<br />
+      I did not write a YAML file.
+    </p>
+    <p class="hi">Matlab: ek click. Deployment + Service Kubernetes par ban jate hain. YAML nahi likha.</p>
+  </div>
+</section>
+
+<!-- SCENE 9 RESULT -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>9 · After deploy — logs and scale</h2>
+      <p class="muted">Wait until the row shows Running. If it is still Creating, just say “it is starting”.</p>
+    </div>
+    <div class="clock"><div class="t">6:20–7:00</div><div class="d">40 seconds</div></div>
+  </div>
+  <div class="box click">
+    <span class="tag click">Do this in order</span>
+    <ol>
+      <li>Point at status badge on <code>hello-web</code>.</li>
+      <li>Click <strong>Logs</strong>. Let 4–5 log lines appear. Do not scroll forever.</li>
+      <li>Close logs. Click <strong>Scale</strong>.</li>
+      <li>Change Replica Count to <code>3</code>. Click save / scale.</li>
+      <li>Optional: point at History / Rollback. Do not roll back.</li>
+    </ol>
+  </div>
+  <table>
+    <tr><th>Scale form field</th><th>Type</th><th>Say</th></tr>
+    <tr><td>Replica Count</td><td class="val">3</td><td>Now I want three copies.</td></tr>
+    <tr><td>Autoscaling checkbox</td><td class="val">leave off</td><td>Skip. We do not need HPA right now.</td></tr>
+  </table>
+  <div class="box speak">
+    <p class="script">
+      The app is up.<br />
+      I can stream logs from the browser. Same idea as kubectl logs… but in the UI.<br />
+      I can scale from two pods to three, without touching the cluster with a command.<br />
+      If a release is bad, there is history, and I can roll back.
+    </p>
+    <p class="hi">Matlab: logs live hain. Scale UI se. Galat release ho to rollback.</p>
+  </div>
+</section>
+
+<!-- SCENE 10 BUILDS -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>10 · Builds — Git to image</h2>
+      <p class="muted">Open the form. Fill it. Do not click Save if you do not have a real repo. Close it.</p>
+    </div>
+    <div class="clock"><div class="t">7:00–7:50</div><div class="d">50 seconds</div></div>
+  </div>
+  <div class="box click">
+    Sidebar → <strong>Builds</strong> → pick project <code>demo-app</code> → <strong>Connect a Git Repository</strong> → fill as you talk → Cancel.
+  </div>
+  <table>
+    <tr><th>Field</th><th>Must?</th><th>Example (do not need to save)</th><th>Say this</th></tr>
+    <tr><td>Name</td><td class="req">YES</td><td class="val">api</td><td>Short name for this repo.</td></tr>
+    <tr><td>Provider</td><td class="req">YES</td><td class="val">GitHub</td><td>GitHub, GitLab, Bitbucket, or Other.</td></tr>
+    <tr><td>Clone URL (HTTPS)</td><td class="req">YES</td><td class="val">https://github.com/you/app.git</td><td>HTTPS only. SSH is not supported.</td></tr>
+    <tr><td>Branch</td><td class="req">YES</td><td class="val">main</td><td>Which branch to build.</td></tr>
+    <tr><td>Dockerfile</td><td>no</td><td class="val">Dockerfile</td><td>Path inside the repo.</td></tr>
+    <tr><td>Context</td><td>no</td><td class="val">.</td><td>Build folder. Dot means the repo root.</td></tr>
+    <tr><td>Image repository</td><td class="req">YES</td><td class="val">ghcr.io/you/api</td><td>Where to push. No tag. DEVORA makes a tag per build.</td></tr>
+    <tr><td>Registry credential</td><td class="req">YES</td><td class="val">(from Registry page)</td><td>Used to push the image.</td></tr>
+    <tr><td>Git access token</td><td>private repos</td><td class="val">ghp_…</td><td>Do not paste a real token on camera.</td></tr>
+    <tr><td>Webhook secret</td><td>no</td><td class="val">(any string)</td><td>GitHub will sign the webhook with this.</td></tr>
+    <tr><td>Auto deploy</td><td>no</td><td class="val">on</td><td>After a good build, update the running app.</td></tr>
+    <tr><td>Target namespace</td><td>if auto</td><td class="val">demo-app</td><td>Where the app lives.</td></tr>
+    <tr><td>Target deployment</td><td>if auto</td><td class="val">hello-web</td><td>Which deployment to roll.</td></tr>
+  </table>
+  <div class="box speak">
+    <p class="script">
+      This page is the git pipeline.<br />
+      You connect a repo. DEVORA clones it, builds with Kaniko inside the cluster, and pushes the image.<br />
+      You do not need Docker on your laptop.<br />
+      If auto deploy is on, a good build updates the running app.
+    </p>
+    <p class="hi">Matlab: git se image banati hai Kaniko. Laptop pe Docker ki zaroorat nahi.</p>
+  </div>
+</section>
+
+<!-- SCENE 11-14 -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>11 · Services · Workloads · Databases · Storage</h2>
+      <p class="muted">Fast tour. 20 seconds each. No forms. Only point and talk.</p>
+    </div>
+    <div class="clock"><div class="t">7:50–9:05</div><div class="d">1 min 15 sec</div></div>
+  </div>
+
+  <h3>Services — 7:50 to 8:10 (20s)</h3>
+  <div class="box click">Sidebar → Services. Select namespace demo-app if asked. Point at hello-web.</div>
+  <div class="box speak">
+    <p class="script">
+      Services are how other apps reach this app.<br />
+      ClusterIP is internal. NodePort is reachable from outside.<br />
+      hello-web should be in this list now.
+    </p>
+  </div>
+
+  <h3>Workloads — 8:10 to 8:30 (20s)</h3>
+  <div class="box click">Sidebar → Workloads. Point at the two or three hello-web pods.</div>
+  <div class="box speak">
+    <p class="script">
+      Workloads is the pod view.<br />
+      If a container is crash looping, you see it here. Not only “pod running”.<br />
+      These are the hello-web copies we asked for.
+    </p>
+  </div>
+
+  <h3>Databases — 8:30 to 8:50 (20s)</h3>
+  <div class="box click">Sidebar → Databases. Scroll the list. Do not open a long table browser.</div>
+  <div class="box speak">
+    <p class="script">
+      If Mongo, Postgres, or MySQL is running in the cluster, this page finds it.<br />
+      You can browse data from the UI. No CLI.
+    </p>
+  </div>
+
+  <h3>Storage — 8:50 to 9:05 (15s)</h3>
+  <div class="box click">Sidebar → Storage. Point at PVC table.</div>
+  <div class="box speak">
+    <p class="script">
+      Storage shows persistent volume claims.<br />
+      Disks that stay even if the pod restarts.<br />
+      Databases need this. A website like nginx usually does not.
+    </p>
+  </div>
+</section>
+
+<!-- SCENE 15 MONITORING AUDIT RBAC -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>12 · Monitoring · Audit · RBAC · Close</h2>
+      <p class="muted">Last 50 seconds. End on a human note. Do not rush the last line.</p>
+    </div>
+    <div class="clock"><div class="t">9:05–9:55</div><div class="d">50 seconds</div></div>
+  </div>
+
+  <h3>Monitoring — 15s</h3>
+  <div class="box click">Sidebar → Monitoring. Point at CPU / memory cards.</div>
+  <div class="box speak">
+    <p class="script">Monitoring is live telemetry. CPU, memory, node conditions. So the platform team can see load without Grafana first.</p>
+  </div>
+
+  <h3>Audit Log — 10s</h3>
+  <div class="box click">Sidebar → Audit Log. Point at the latest row (your deploy).</div>
+  <div class="box speak">
+    <p class="script">Every action is logged. Who deployed. When. What changed. This is for trust, and for companies.</p>
+  </div>
+
+  <h3>RBAC — 10s</h3>
+  <div class="box click">Sidebar → RBAC. Point at Admin / Developer / Viewer.</div>
+  <div class="box speak">
+    <p class="script">Roles are not only in the UI. The API checks them too. A viewer cannot deploy. An admin can.</p>
+  </div>
+
+  <h3>Close — 15s · look at camera if you can</h3>
+  <div class="box speak">
+    <p class="script">
+      So that is DEVORA.<br />
+      Svelte on the front. Go on the back. Postgres. Keycloak. Kubernetes.<br />
+      If you work in DevOps or platform engineering, I would love your feedback.<br />
+      Thank you for watching.
+    </p>
+    <p class="hi">Ant me muskurake “thank you” bolo. Extra line mat jodo.</p>
+  </div>
+</section>
+
+<!-- CHEAT SHEET -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>Phone cheat sheet — only the words</h2>
+      <p class="muted">Put this page on your phone. Do not read every comma. Just the idea.</p>
+    </div>
+    <div class="clock"><div class="t">Say</div><div class="d">cue cards</div></div>
+  </div>
+  <ol class="cheat">
+    <li>I built DEVORA. Internal Developer Platform for Kubernetes.</li>
+    <li>Login is Keycloak. Roles: admin, developer, viewer.</li>
+    <li>Dashboard is live cluster health.</li>
+    <li>Clusters: Kind, Minikube, or import. Active cluster drives the whole app.</li>
+    <li>Project is a team workspace. Slug: demo-app.</li>
+    <li>Namespace is the Kubernetes box. Same name: demo-app.</li>
+    <li>Registry is for private images. nginx is public, so skip.</li>
+    <li>Deploy hello-web. Image nginx:alpine. Port 80. Replicas 2. NodePort.</li>
+    <li>Config goes to ConfigMap. Secrets stay hidden. Then create.</li>
+    <li>Logs in the browser. Scale to 3. Rollback is there if we need it.</li>
+    <li>Builds: Git, Kaniko, push, optional auto-deploy.</li>
+    <li>Services, workloads, databases, storage, monitoring.</li>
+    <li>Audit log and RBAC — who did what, who is allowed.</li>
+    <li>Svelte, Go, Postgres, Keycloak, Kubernetes. I would love your feedback. Thank you.</li>
+  </ol>
+</section>
+
+<!-- HOW TO RECORD -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>How to record and upload</h2>
+      <p class="muted">Simple path. No fancy studio.</p>
+    </div>
+    <div class="clock"><div class="t">After</div><div class="d">CapCut + LinkedIn</div></div>
+  </div>
+  <ol>
+    <li>Practice the deploy form once without recording.</li>
+    <li>Record the screen with QuickTime or OBS. Mic on. Room quiet.</li>
+    <li>If you freeze, pause 2 seconds and continue. Cut the freeze in CapCut.</li>
+    <li>Add captions in CapCut. Fix: DEVORA, Kubernetes, Keycloak, Kaniko, nginx.</li>
+    <li>Watch the export on your <strong>phone</strong>. If you cannot read a field, zoom the browser and re-record that scene.</li>
+    <li>Upload as a native LinkedIn video (not a YouTube link).</li>
+  </ol>
+  <h3>LinkedIn post text (paste)</h3>
+  <div class="box note">
+    <p>I built DEVORA — a self-service Internal Developer Platform for Kubernetes.</p>
+    <p>Developers should not need a wall of YAML just to ship an app.</p>
+    <p>In this walkthrough I log in with Keycloak, create a project and namespace, and deploy hello-web (nginx) from the UI — then scale it and stream logs.</p>
+    <p>Stack: Svelte · Go · Connect RPC · PostgreSQL · Keycloak · Kubernetes</p>
+    <p>If you work in platform engineering or DevOps, I would love your feedback.</p>
+    <p>#Kubernetes #DevOps #PlatformEngineering #Golang #Svelte</p>
+  </div>
+  <p class="footer-note">First comment to post yourself: “Quick recap — UI: Svelte · API: Go · Auth: Keycloak · Data: Postgres · Workloads: Kubernetes. Happy to answer architecture questions.”</p>
+</section>
+
+<!-- WORDS -->
+<section class="scene">
+  <div class="head">
+    <div>
+      <h2>Say these words slowly</h2>
+      <p class="muted">If a word is hard, use the easy line instead.</p>
+    </div>
+    <div class="clock"><div class="t">Help</div><div class="d">pronunciation</div></div>
+  </div>
+  <table>
+    <tr><th>Word</th><th>Say it</th><th>Easy backup line</th></tr>
+    <tr><td>DEVORA</td><td>de-VOR-ah</td><td>my platform</td></tr>
+    <tr><td>Kubernetes</td><td>koo-ber-NET-eez</td><td>the cluster</td></tr>
+    <tr><td>Keycloak</td><td>KEY-cloak</td><td>the login system</td></tr>
+    <tr><td>namespace</td><td>NAME-space</td><td>a box for the team</td></tr>
+    <tr><td>replicas</td><td>REP-li-kuhs</td><td>how many copies</td></tr>
+    <tr><td>nginx</td><td>engine-X</td><td>a web server image</td></tr>
+    <tr><td>Kaniko</td><td>KAH-nee-ko</td><td>the tool that builds the image</td></tr>
+    <tr><td>registry</td><td>REH-jis-tree</td><td>where Docker images are stored</td></tr>
+    <tr><td>RBAC</td><td>R-back</td><td>who is allowed to do what</td></tr>
+    <tr><td>PostgreSQL</td><td>POST-gress</td><td>the database</td></tr>
+    <tr><td>Svelte</td><td>svelt</td><td>the frontend</td></tr>
+    <tr><td>audit log</td><td>AW-dit log</td><td>the history of actions</td></tr>
+  </table>
+  <div class="warn" style="margin-top:16px">
+    Do not say: “production-grade multi-tenant ecosystem”, “leveraging”, “I am excited to showcase”.<br />
+    Do say: “I built this so developers can deploy from the UI.”
+  </div>
+</section>
+
+</body>
+</html>

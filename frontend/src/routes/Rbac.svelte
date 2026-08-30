@@ -4,7 +4,8 @@
   import CardHeader from '$components/ui/CardHeader.svelte';
   import CardTitle from '$components/ui/CardTitle.svelte';
   import { auth } from '$stores/auth';
-  import { Shield, CheckCircle2, User, Key, Lock, ShieldAlert } from '@lucide/svelte';
+  import { Shield, CheckCircle2, User, Key, Lock as LockIcon, ShieldAlert } from '@lucide/svelte';
+  import PageHeader from '$components/ui/PageHeader.svelte';
 
   // Reactively track the actual logged-in user from the auth store
   const user = $derived($auth.user);
@@ -38,13 +39,11 @@
   ]);
 </script>
 
-<div class="space-y-6">
-  <div>
-    <h1 class="text-2xl font-semibold tracking-tight">Access Control (RBAC)</h1>
-    <p class="mt-1 text-sm text-muted-foreground">
-      View identity policies, verify active token claims, and check role permissions.
-    </p>
-  </div>
+<div class="page-stack">
+  <PageHeader
+    title="Access Control (RBAC)"
+    description="View identity policies, verify active token claims, and check role permissions."
+  />
 
   <!-- Active Identity Details -->
   {#if user}
@@ -70,7 +69,7 @@
         </div>
         <div class="space-y-1">
           <span class="text-xs text-muted-foreground flex items-center gap-1">
-            <Lock class="h-3.5 w-3.5" /> Auth Provider
+            <LockIcon class="h-3.5 w-3.5" /> Auth Provider
           </span>
           <p class="text-sm font-semibold text-foreground">
             {token ? 'Keycloak OIDC' : 'Developer Mock Mode'}

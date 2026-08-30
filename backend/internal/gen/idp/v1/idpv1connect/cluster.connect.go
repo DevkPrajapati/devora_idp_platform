@@ -50,12 +50,39 @@ const (
 	// ClusterServiceStreamPodLogsProcedure is the fully-qualified name of the ClusterService's
 	// StreamPodLogs RPC.
 	ClusterServiceStreamPodLogsProcedure = "/idp.v1.ClusterService/StreamPodLogs"
+	// ClusterServiceStreamClusterLogsProcedure is the fully-qualified name of the ClusterService's
+	// StreamClusterLogs RPC.
+	ClusterServiceStreamClusterLogsProcedure = "/idp.v1.ClusterService/StreamClusterLogs"
 	// ClusterServiceListNodesProcedure is the fully-qualified name of the ClusterService's ListNodes
 	// RPC.
 	ClusterServiceListNodesProcedure = "/idp.v1.ClusterService/ListNodes"
 	// ClusterServiceGetResourceMetricsProcedure is the fully-qualified name of the ClusterService's
 	// GetResourceMetrics RPC.
 	ClusterServiceGetResourceMetricsProcedure = "/idp.v1.ClusterService/GetResourceMetrics"
+	// ClusterServiceListClusterNamespacesProcedure is the fully-qualified name of the ClusterService's
+	// ListClusterNamespaces RPC.
+	ClusterServiceListClusterNamespacesProcedure = "/idp.v1.ClusterService/ListClusterNamespaces"
+	// ClusterServiceGetNamespaceResourcesProcedure is the fully-qualified name of the ClusterService's
+	// GetNamespaceResources RPC.
+	ClusterServiceGetNamespaceResourcesProcedure = "/idp.v1.ClusterService/GetNamespaceResources"
+	// ClusterServiceListClustersProcedure is the fully-qualified name of the ClusterService's
+	// ListClusters RPC.
+	ClusterServiceListClustersProcedure = "/idp.v1.ClusterService/ListClusters"
+	// ClusterServiceCreateClusterProcedure is the fully-qualified name of the ClusterService's
+	// CreateCluster RPC.
+	ClusterServiceCreateClusterProcedure = "/idp.v1.ClusterService/CreateCluster"
+	// ClusterServiceActivateClusterProcedure is the fully-qualified name of the ClusterService's
+	// ActivateCluster RPC.
+	ClusterServiceActivateClusterProcedure = "/idp.v1.ClusterService/ActivateCluster"
+	// ClusterServiceStopClusterProcedure is the fully-qualified name of the ClusterService's
+	// StopCluster RPC.
+	ClusterServiceStopClusterProcedure = "/idp.v1.ClusterService/StopCluster"
+	// ClusterServiceRestartClusterProcedure is the fully-qualified name of the ClusterService's
+	// RestartCluster RPC.
+	ClusterServiceRestartClusterProcedure = "/idp.v1.ClusterService/RestartCluster"
+	// ClusterServiceDeleteClusterProcedure is the fully-qualified name of the ClusterService's
+	// DeleteCluster RPC.
+	ClusterServiceDeleteClusterProcedure = "/idp.v1.ClusterService/DeleteCluster"
 )
 
 // ClusterServiceClient is a client for the idp.v1.ClusterService service.
@@ -69,8 +96,24 @@ type ClusterServiceClient interface {
 	// Streams log lines as the container writes them. The stream stays open
 	// until the client disconnects or the container exits.
 	StreamPodLogs(context.Context, *connect.Request[v1.StreamPodLogsRequest]) (*connect.ServerStreamForClient[v1.LogLine], error)
+	// Streams provisioner output (kind/minikube create, stop, restart) plus
+	// live node logs and Kubernetes events for a fleet cluster. LogLine.pod_name
+	// is the source: provision, lifecycle, node, or event.
+	StreamClusterLogs(context.Context, *connect.Request[v1.StreamClusterLogsRequest]) (*connect.ServerStreamForClient[v1.LogLine], error)
 	ListNodes(context.Context, *connect.Request[v1.ListNodesRequest]) (*connect.Response[v1.ListNodesResponse], error)
 	GetResourceMetrics(context.Context, *connect.Request[v1.GetResourceMetricsRequest]) (*connect.Response[v1.GetResourceMetricsResponse], error)
+	// Live cluster namespaces — the same set `kubectl get ns` returns.
+	ListClusterNamespaces(context.Context, *connect.Request[v1.ListClusterNamespacesRequest]) (*connect.Response[v1.ListClusterNamespacesResponse], error)
+	// Workloads, networking, config and storage inside one namespace.
+	GetNamespaceResources(context.Context, *connect.Request[v1.GetNamespaceResourcesRequest]) (*connect.Response[v1.GetNamespaceResourcesResponse], error)
+	// Fleet: admin-managed Kubernetes clusters. Create/stop/restart/delete are
+	// admin-only; listing is readable so the console can show which cluster is live.
+	ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error)
+	CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.ManagedCluster], error)
+	ActivateCluster(context.Context, *connect.Request[v1.ActivateClusterRequest]) (*connect.Response[v1.ManagedCluster], error)
+	StopCluster(context.Context, *connect.Request[v1.StopClusterRequest]) (*connect.Response[v1.ManagedCluster], error)
+	RestartCluster(context.Context, *connect.Request[v1.RestartClusterRequest]) (*connect.Response[v1.ManagedCluster], error)
+	DeleteCluster(context.Context, *connect.Request[v1.DeleteClusterRequest]) (*connect.Response[v1.DeleteClusterResponse], error)
 }
 
 // NewClusterServiceClient constructs a client for the idp.v1.ClusterService service. By default, it
@@ -120,6 +163,12 @@ func NewClusterServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(clusterServiceMethods.ByName("StreamPodLogs")),
 			connect.WithClientOptions(opts...),
 		),
+		streamClusterLogs: connect.NewClient[v1.StreamClusterLogsRequest, v1.LogLine](
+			httpClient,
+			baseURL+ClusterServiceStreamClusterLogsProcedure,
+			connect.WithSchema(clusterServiceMethods.ByName("StreamClusterLogs")),
+			connect.WithClientOptions(opts...),
+		),
 		listNodes: connect.NewClient[v1.ListNodesRequest, v1.ListNodesResponse](
 			httpClient,
 			baseURL+ClusterServiceListNodesProcedure,
@@ -132,19 +181,76 @@ func NewClusterServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(clusterServiceMethods.ByName("GetResourceMetrics")),
 			connect.WithClientOptions(opts...),
 		),
+		listClusterNamespaces: connect.NewClient[v1.ListClusterNamespacesRequest, v1.ListClusterNamespacesResponse](
+			httpClient,
+			baseURL+ClusterServiceListClusterNamespacesProcedure,
+			connect.WithSchema(clusterServiceMethods.ByName("ListClusterNamespaces")),
+			connect.WithClientOptions(opts...),
+		),
+		getNamespaceResources: connect.NewClient[v1.GetNamespaceResourcesRequest, v1.GetNamespaceResourcesResponse](
+			httpClient,
+			baseURL+ClusterServiceGetNamespaceResourcesProcedure,
+			connect.WithSchema(clusterServiceMethods.ByName("GetNamespaceResources")),
+			connect.WithClientOptions(opts...),
+		),
+		listClusters: connect.NewClient[v1.ListClustersRequest, v1.ListClustersResponse](
+			httpClient,
+			baseURL+ClusterServiceListClustersProcedure,
+			connect.WithSchema(clusterServiceMethods.ByName("ListClusters")),
+			connect.WithClientOptions(opts...),
+		),
+		createCluster: connect.NewClient[v1.CreateClusterRequest, v1.ManagedCluster](
+			httpClient,
+			baseURL+ClusterServiceCreateClusterProcedure,
+			connect.WithSchema(clusterServiceMethods.ByName("CreateCluster")),
+			connect.WithClientOptions(opts...),
+		),
+		activateCluster: connect.NewClient[v1.ActivateClusterRequest, v1.ManagedCluster](
+			httpClient,
+			baseURL+ClusterServiceActivateClusterProcedure,
+			connect.WithSchema(clusterServiceMethods.ByName("ActivateCluster")),
+			connect.WithClientOptions(opts...),
+		),
+		stopCluster: connect.NewClient[v1.StopClusterRequest, v1.ManagedCluster](
+			httpClient,
+			baseURL+ClusterServiceStopClusterProcedure,
+			connect.WithSchema(clusterServiceMethods.ByName("StopCluster")),
+			connect.WithClientOptions(opts...),
+		),
+		restartCluster: connect.NewClient[v1.RestartClusterRequest, v1.ManagedCluster](
+			httpClient,
+			baseURL+ClusterServiceRestartClusterProcedure,
+			connect.WithSchema(clusterServiceMethods.ByName("RestartCluster")),
+			connect.WithClientOptions(opts...),
+		),
+		deleteCluster: connect.NewClient[v1.DeleteClusterRequest, v1.DeleteClusterResponse](
+			httpClient,
+			baseURL+ClusterServiceDeleteClusterProcedure,
+			connect.WithSchema(clusterServiceMethods.ByName("DeleteCluster")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // clusterServiceClient implements ClusterServiceClient.
 type clusterServiceClient struct {
-	getOverview        *connect.Client[v1.GetOverviewRequest, v1.GetOverviewResponse]
-	listEvents         *connect.Client[v1.ListEventsRequest, v1.ListEventsResponse]
-	listPods           *connect.Client[v1.ListPodsRequest, v1.ListPodsResponse]
-	listServices       *connect.Client[v1.ListServicesRequest, v1.ListServicesResponse]
-	getPodLogs         *connect.Client[v1.GetPodLogsRequest, v1.GetPodLogsResponse]
-	streamPodLogs      *connect.Client[v1.StreamPodLogsRequest, v1.LogLine]
-	listNodes          *connect.Client[v1.ListNodesRequest, v1.ListNodesResponse]
-	getResourceMetrics *connect.Client[v1.GetResourceMetricsRequest, v1.GetResourceMetricsResponse]
+	getOverview           *connect.Client[v1.GetOverviewRequest, v1.GetOverviewResponse]
+	listEvents            *connect.Client[v1.ListEventsRequest, v1.ListEventsResponse]
+	listPods              *connect.Client[v1.ListPodsRequest, v1.ListPodsResponse]
+	listServices          *connect.Client[v1.ListServicesRequest, v1.ListServicesResponse]
+	getPodLogs            *connect.Client[v1.GetPodLogsRequest, v1.GetPodLogsResponse]
+	streamPodLogs         *connect.Client[v1.StreamPodLogsRequest, v1.LogLine]
+	streamClusterLogs     *connect.Client[v1.StreamClusterLogsRequest, v1.LogLine]
+	listNodes             *connect.Client[v1.ListNodesRequest, v1.ListNodesResponse]
+	getResourceMetrics    *connect.Client[v1.GetResourceMetricsRequest, v1.GetResourceMetricsResponse]
+	listClusterNamespaces *connect.Client[v1.ListClusterNamespacesRequest, v1.ListClusterNamespacesResponse]
+	getNamespaceResources *connect.Client[v1.GetNamespaceResourcesRequest, v1.GetNamespaceResourcesResponse]
+	listClusters          *connect.Client[v1.ListClustersRequest, v1.ListClustersResponse]
+	createCluster         *connect.Client[v1.CreateClusterRequest, v1.ManagedCluster]
+	activateCluster       *connect.Client[v1.ActivateClusterRequest, v1.ManagedCluster]
+	stopCluster           *connect.Client[v1.StopClusterRequest, v1.ManagedCluster]
+	restartCluster        *connect.Client[v1.RestartClusterRequest, v1.ManagedCluster]
+	deleteCluster         *connect.Client[v1.DeleteClusterRequest, v1.DeleteClusterResponse]
 }
 
 // GetOverview calls idp.v1.ClusterService.GetOverview.
@@ -177,6 +283,11 @@ func (c *clusterServiceClient) StreamPodLogs(ctx context.Context, req *connect.R
 	return c.streamPodLogs.CallServerStream(ctx, req)
 }
 
+// StreamClusterLogs calls idp.v1.ClusterService.StreamClusterLogs.
+func (c *clusterServiceClient) StreamClusterLogs(ctx context.Context, req *connect.Request[v1.StreamClusterLogsRequest]) (*connect.ServerStreamForClient[v1.LogLine], error) {
+	return c.streamClusterLogs.CallServerStream(ctx, req)
+}
+
 // ListNodes calls idp.v1.ClusterService.ListNodes.
 func (c *clusterServiceClient) ListNodes(ctx context.Context, req *connect.Request[v1.ListNodesRequest]) (*connect.Response[v1.ListNodesResponse], error) {
 	return c.listNodes.CallUnary(ctx, req)
@@ -185,6 +296,46 @@ func (c *clusterServiceClient) ListNodes(ctx context.Context, req *connect.Reque
 // GetResourceMetrics calls idp.v1.ClusterService.GetResourceMetrics.
 func (c *clusterServiceClient) GetResourceMetrics(ctx context.Context, req *connect.Request[v1.GetResourceMetricsRequest]) (*connect.Response[v1.GetResourceMetricsResponse], error) {
 	return c.getResourceMetrics.CallUnary(ctx, req)
+}
+
+// ListClusterNamespaces calls idp.v1.ClusterService.ListClusterNamespaces.
+func (c *clusterServiceClient) ListClusterNamespaces(ctx context.Context, req *connect.Request[v1.ListClusterNamespacesRequest]) (*connect.Response[v1.ListClusterNamespacesResponse], error) {
+	return c.listClusterNamespaces.CallUnary(ctx, req)
+}
+
+// GetNamespaceResources calls idp.v1.ClusterService.GetNamespaceResources.
+func (c *clusterServiceClient) GetNamespaceResources(ctx context.Context, req *connect.Request[v1.GetNamespaceResourcesRequest]) (*connect.Response[v1.GetNamespaceResourcesResponse], error) {
+	return c.getNamespaceResources.CallUnary(ctx, req)
+}
+
+// ListClusters calls idp.v1.ClusterService.ListClusters.
+func (c *clusterServiceClient) ListClusters(ctx context.Context, req *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error) {
+	return c.listClusters.CallUnary(ctx, req)
+}
+
+// CreateCluster calls idp.v1.ClusterService.CreateCluster.
+func (c *clusterServiceClient) CreateCluster(ctx context.Context, req *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.ManagedCluster], error) {
+	return c.createCluster.CallUnary(ctx, req)
+}
+
+// ActivateCluster calls idp.v1.ClusterService.ActivateCluster.
+func (c *clusterServiceClient) ActivateCluster(ctx context.Context, req *connect.Request[v1.ActivateClusterRequest]) (*connect.Response[v1.ManagedCluster], error) {
+	return c.activateCluster.CallUnary(ctx, req)
+}
+
+// StopCluster calls idp.v1.ClusterService.StopCluster.
+func (c *clusterServiceClient) StopCluster(ctx context.Context, req *connect.Request[v1.StopClusterRequest]) (*connect.Response[v1.ManagedCluster], error) {
+	return c.stopCluster.CallUnary(ctx, req)
+}
+
+// RestartCluster calls idp.v1.ClusterService.RestartCluster.
+func (c *clusterServiceClient) RestartCluster(ctx context.Context, req *connect.Request[v1.RestartClusterRequest]) (*connect.Response[v1.ManagedCluster], error) {
+	return c.restartCluster.CallUnary(ctx, req)
+}
+
+// DeleteCluster calls idp.v1.ClusterService.DeleteCluster.
+func (c *clusterServiceClient) DeleteCluster(ctx context.Context, req *connect.Request[v1.DeleteClusterRequest]) (*connect.Response[v1.DeleteClusterResponse], error) {
+	return c.deleteCluster.CallUnary(ctx, req)
 }
 
 // ClusterServiceHandler is an implementation of the idp.v1.ClusterService service.
@@ -198,8 +349,24 @@ type ClusterServiceHandler interface {
 	// Streams log lines as the container writes them. The stream stays open
 	// until the client disconnects or the container exits.
 	StreamPodLogs(context.Context, *connect.Request[v1.StreamPodLogsRequest], *connect.ServerStream[v1.LogLine]) error
+	// Streams provisioner output (kind/minikube create, stop, restart) plus
+	// live node logs and Kubernetes events for a fleet cluster. LogLine.pod_name
+	// is the source: provision, lifecycle, node, or event.
+	StreamClusterLogs(context.Context, *connect.Request[v1.StreamClusterLogsRequest], *connect.ServerStream[v1.LogLine]) error
 	ListNodes(context.Context, *connect.Request[v1.ListNodesRequest]) (*connect.Response[v1.ListNodesResponse], error)
 	GetResourceMetrics(context.Context, *connect.Request[v1.GetResourceMetricsRequest]) (*connect.Response[v1.GetResourceMetricsResponse], error)
+	// Live cluster namespaces — the same set `kubectl get ns` returns.
+	ListClusterNamespaces(context.Context, *connect.Request[v1.ListClusterNamespacesRequest]) (*connect.Response[v1.ListClusterNamespacesResponse], error)
+	// Workloads, networking, config and storage inside one namespace.
+	GetNamespaceResources(context.Context, *connect.Request[v1.GetNamespaceResourcesRequest]) (*connect.Response[v1.GetNamespaceResourcesResponse], error)
+	// Fleet: admin-managed Kubernetes clusters. Create/stop/restart/delete are
+	// admin-only; listing is readable so the console can show which cluster is live.
+	ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error)
+	CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.ManagedCluster], error)
+	ActivateCluster(context.Context, *connect.Request[v1.ActivateClusterRequest]) (*connect.Response[v1.ManagedCluster], error)
+	StopCluster(context.Context, *connect.Request[v1.StopClusterRequest]) (*connect.Response[v1.ManagedCluster], error)
+	RestartCluster(context.Context, *connect.Request[v1.RestartClusterRequest]) (*connect.Response[v1.ManagedCluster], error)
+	DeleteCluster(context.Context, *connect.Request[v1.DeleteClusterRequest]) (*connect.Response[v1.DeleteClusterResponse], error)
 }
 
 // NewClusterServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -245,6 +412,12 @@ func NewClusterServiceHandler(svc ClusterServiceHandler, opts ...connect.Handler
 		connect.WithSchema(clusterServiceMethods.ByName("StreamPodLogs")),
 		connect.WithHandlerOptions(opts...),
 	)
+	clusterServiceStreamClusterLogsHandler := connect.NewServerStreamHandler(
+		ClusterServiceStreamClusterLogsProcedure,
+		svc.StreamClusterLogs,
+		connect.WithSchema(clusterServiceMethods.ByName("StreamClusterLogs")),
+		connect.WithHandlerOptions(opts...),
+	)
 	clusterServiceListNodesHandler := connect.NewUnaryHandler(
 		ClusterServiceListNodesProcedure,
 		svc.ListNodes,
@@ -255,6 +428,54 @@ func NewClusterServiceHandler(svc ClusterServiceHandler, opts ...connect.Handler
 		ClusterServiceGetResourceMetricsProcedure,
 		svc.GetResourceMetrics,
 		connect.WithSchema(clusterServiceMethods.ByName("GetResourceMetrics")),
+		connect.WithHandlerOptions(opts...),
+	)
+	clusterServiceListClusterNamespacesHandler := connect.NewUnaryHandler(
+		ClusterServiceListClusterNamespacesProcedure,
+		svc.ListClusterNamespaces,
+		connect.WithSchema(clusterServiceMethods.ByName("ListClusterNamespaces")),
+		connect.WithHandlerOptions(opts...),
+	)
+	clusterServiceGetNamespaceResourcesHandler := connect.NewUnaryHandler(
+		ClusterServiceGetNamespaceResourcesProcedure,
+		svc.GetNamespaceResources,
+		connect.WithSchema(clusterServiceMethods.ByName("GetNamespaceResources")),
+		connect.WithHandlerOptions(opts...),
+	)
+	clusterServiceListClustersHandler := connect.NewUnaryHandler(
+		ClusterServiceListClustersProcedure,
+		svc.ListClusters,
+		connect.WithSchema(clusterServiceMethods.ByName("ListClusters")),
+		connect.WithHandlerOptions(opts...),
+	)
+	clusterServiceCreateClusterHandler := connect.NewUnaryHandler(
+		ClusterServiceCreateClusterProcedure,
+		svc.CreateCluster,
+		connect.WithSchema(clusterServiceMethods.ByName("CreateCluster")),
+		connect.WithHandlerOptions(opts...),
+	)
+	clusterServiceActivateClusterHandler := connect.NewUnaryHandler(
+		ClusterServiceActivateClusterProcedure,
+		svc.ActivateCluster,
+		connect.WithSchema(clusterServiceMethods.ByName("ActivateCluster")),
+		connect.WithHandlerOptions(opts...),
+	)
+	clusterServiceStopClusterHandler := connect.NewUnaryHandler(
+		ClusterServiceStopClusterProcedure,
+		svc.StopCluster,
+		connect.WithSchema(clusterServiceMethods.ByName("StopCluster")),
+		connect.WithHandlerOptions(opts...),
+	)
+	clusterServiceRestartClusterHandler := connect.NewUnaryHandler(
+		ClusterServiceRestartClusterProcedure,
+		svc.RestartCluster,
+		connect.WithSchema(clusterServiceMethods.ByName("RestartCluster")),
+		connect.WithHandlerOptions(opts...),
+	)
+	clusterServiceDeleteClusterHandler := connect.NewUnaryHandler(
+		ClusterServiceDeleteClusterProcedure,
+		svc.DeleteCluster,
+		connect.WithSchema(clusterServiceMethods.ByName("DeleteCluster")),
 		connect.WithHandlerOptions(opts...),
 	)
 	return "/idp.v1.ClusterService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -271,10 +492,28 @@ func NewClusterServiceHandler(svc ClusterServiceHandler, opts ...connect.Handler
 			clusterServiceGetPodLogsHandler.ServeHTTP(w, r)
 		case ClusterServiceStreamPodLogsProcedure:
 			clusterServiceStreamPodLogsHandler.ServeHTTP(w, r)
+		case ClusterServiceStreamClusterLogsProcedure:
+			clusterServiceStreamClusterLogsHandler.ServeHTTP(w, r)
 		case ClusterServiceListNodesProcedure:
 			clusterServiceListNodesHandler.ServeHTTP(w, r)
 		case ClusterServiceGetResourceMetricsProcedure:
 			clusterServiceGetResourceMetricsHandler.ServeHTTP(w, r)
+		case ClusterServiceListClusterNamespacesProcedure:
+			clusterServiceListClusterNamespacesHandler.ServeHTTP(w, r)
+		case ClusterServiceGetNamespaceResourcesProcedure:
+			clusterServiceGetNamespaceResourcesHandler.ServeHTTP(w, r)
+		case ClusterServiceListClustersProcedure:
+			clusterServiceListClustersHandler.ServeHTTP(w, r)
+		case ClusterServiceCreateClusterProcedure:
+			clusterServiceCreateClusterHandler.ServeHTTP(w, r)
+		case ClusterServiceActivateClusterProcedure:
+			clusterServiceActivateClusterHandler.ServeHTTP(w, r)
+		case ClusterServiceStopClusterProcedure:
+			clusterServiceStopClusterHandler.ServeHTTP(w, r)
+		case ClusterServiceRestartClusterProcedure:
+			clusterServiceRestartClusterHandler.ServeHTTP(w, r)
+		case ClusterServiceDeleteClusterProcedure:
+			clusterServiceDeleteClusterHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -308,10 +547,46 @@ func (UnimplementedClusterServiceHandler) StreamPodLogs(context.Context, *connec
 	return connect.NewError(connect.CodeUnimplemented, errors.New("idp.v1.ClusterService.StreamPodLogs is not implemented"))
 }
 
+func (UnimplementedClusterServiceHandler) StreamClusterLogs(context.Context, *connect.Request[v1.StreamClusterLogsRequest], *connect.ServerStream[v1.LogLine]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("idp.v1.ClusterService.StreamClusterLogs is not implemented"))
+}
+
 func (UnimplementedClusterServiceHandler) ListNodes(context.Context, *connect.Request[v1.ListNodesRequest]) (*connect.Response[v1.ListNodesResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("idp.v1.ClusterService.ListNodes is not implemented"))
 }
 
 func (UnimplementedClusterServiceHandler) GetResourceMetrics(context.Context, *connect.Request[v1.GetResourceMetricsRequest]) (*connect.Response[v1.GetResourceMetricsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("idp.v1.ClusterService.GetResourceMetrics is not implemented"))
+}
+
+func (UnimplementedClusterServiceHandler) ListClusterNamespaces(context.Context, *connect.Request[v1.ListClusterNamespacesRequest]) (*connect.Response[v1.ListClusterNamespacesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("idp.v1.ClusterService.ListClusterNamespaces is not implemented"))
+}
+
+func (UnimplementedClusterServiceHandler) GetNamespaceResources(context.Context, *connect.Request[v1.GetNamespaceResourcesRequest]) (*connect.Response[v1.GetNamespaceResourcesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("idp.v1.ClusterService.GetNamespaceResources is not implemented"))
+}
+
+func (UnimplementedClusterServiceHandler) ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("idp.v1.ClusterService.ListClusters is not implemented"))
+}
+
+func (UnimplementedClusterServiceHandler) CreateCluster(context.Context, *connect.Request[v1.CreateClusterRequest]) (*connect.Response[v1.ManagedCluster], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("idp.v1.ClusterService.CreateCluster is not implemented"))
+}
+
+func (UnimplementedClusterServiceHandler) ActivateCluster(context.Context, *connect.Request[v1.ActivateClusterRequest]) (*connect.Response[v1.ManagedCluster], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("idp.v1.ClusterService.ActivateCluster is not implemented"))
+}
+
+func (UnimplementedClusterServiceHandler) StopCluster(context.Context, *connect.Request[v1.StopClusterRequest]) (*connect.Response[v1.ManagedCluster], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("idp.v1.ClusterService.StopCluster is not implemented"))
+}
+
+func (UnimplementedClusterServiceHandler) RestartCluster(context.Context, *connect.Request[v1.RestartClusterRequest]) (*connect.Response[v1.ManagedCluster], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("idp.v1.ClusterService.RestartCluster is not implemented"))
+}
+
+func (UnimplementedClusterServiceHandler) DeleteCluster(context.Context, *connect.Request[v1.DeleteClusterRequest]) (*connect.Response[v1.DeleteClusterResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("idp.v1.ClusterService.DeleteCluster is not implemented"))
 }

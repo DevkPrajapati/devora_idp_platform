@@ -1,5 +1,7 @@
 <script lang="ts">
   import Card from '$components/ui/Card.svelte';
+  import PageHeader from '$components/ui/PageHeader.svelte';
+  import Skeleton from '$components/ui/Skeleton.svelte';
   import CardContent from '$components/ui/CardContent.svelte';
   import CardHeader from '$components/ui/CardHeader.svelte';
   import CardTitle from '$components/ui/CardTitle.svelte';
@@ -28,13 +30,11 @@
   }
 </script>
 
-<div class="space-y-6">
-  <div>
-    <h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
-    <p class="mt-1 text-sm text-muted-foreground">
-      Configure platform interface parameters and view connection configs.
-    </p>
-  </div>
+<div class="page-stack">
+  <PageHeader
+    title="Settings"
+    description="Configure platform interface parameters and view connection configs."
+  />
 
   <div class="grid gap-4 md:grid-cols-2">
     <!-- UI Settings -->
@@ -48,8 +48,8 @@
       <CardContent class="space-y-4">
         <div class="flex items-center justify-between border-b border-border pb-3">
           <div>
-            <p class="text-sm font-medium">Dark Mode / Color Theme</p>
-            <p class="text-xs text-muted-foreground">Select preferred interface appearance</p>
+            <p class="text-sm font-medium">Black / white theme</p>
+            <p class="text-xs text-muted-foreground">Toggle between light and dark console appearance</p>
           </div>
           <ThemeToggle />
         </div>
@@ -75,7 +75,7 @@
       </CardHeader>
       <CardContent class="space-y-3.5 text-sm">
         {#if platformQuery.isPending}
-          <p class="py-2 text-xs text-muted-foreground">Loading platform configuration…</p>
+          <Skeleton rows={3} />
         {:else if platformQuery.isError}
           <p class="py-2 text-xs text-destructive">
             Could not reach the platform API. Values below are unavailable rather than assumed.
@@ -134,7 +134,7 @@
     </CardHeader>
     <CardContent class="space-y-2.5">
       <p class="text-sm">
-        IDP Platform is an internal self-service portal built on top of standard Connect RPC API and client-go primitives.
+        DEVORA is a self-service developer infrastructure platform built on Connect RPC and Kubernetes client-go primitives.
       </p>
       <p class="text-xs text-muted-foreground">
         Version: {orUnknown(platform?.version)} &middot; reported by the running backend.

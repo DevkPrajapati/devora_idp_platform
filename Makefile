@@ -57,7 +57,7 @@ db-ui: ## Print Adminer login details for the IDP database
 	@echo "Database: idp"
 	@echo ""
 	@echo "IDP tables: projects, project_members, namespaces,"
-	@echo "            registry_credentials, git_repositories, builds, audit_logs"
+	@echo "            registry_credentials, git_repositories, builds, clusters, audit_logs"
 	@echo "(Keycloak also stores its tables in the same database — leave those alone.)"
 
 fix-keycloak: ## Fix Keycloak so Admin-UI users can log into the IDP

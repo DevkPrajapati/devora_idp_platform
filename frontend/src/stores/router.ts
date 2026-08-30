@@ -14,6 +14,7 @@ export type Route =
   | '/monitoring'
   | '/audit'
   | '/rbac'
+  | '/clusters'
   | '/settings';
 
 const ROUTES: readonly Route[] = [
@@ -30,6 +31,7 @@ const ROUTES: readonly Route[] = [
   '/monitoring',
   '/audit',
   '/rbac',
+  '/clusters',
   '/settings',
 ];
 

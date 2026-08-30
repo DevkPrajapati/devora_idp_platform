@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { meterBarClass, meterTextClass } from '$lib/status';
   /**
    * A single ratio against a limit — CPU requested vs allocatable, pods ready
    * vs desired. Deliberately a meter and not a two-slice donut: with one
@@ -44,13 +45,13 @@
     <!-- Rounded data-end anchored to the baseline; the track is the same ramp
          one step down rather than a contrasting hue. -->
     <div
-      class="h-full rounded-full bg-primary transition-[width] duration-500 ease-out motion-reduce:transition-none"
+      class="h-full rounded-full {meterBarClass(clamped)} transition-[width] duration-500 ease-out motion-reduce:transition-none"
       style="width: {clamped}%"
     ></div>
   </div>
 
   <div class="flex items-baseline justify-between gap-3">
-    <span class="text-xs tabular-nums text-muted-foreground">{clamped}%</span>
+    <span class="text-xs tabular-nums {meterTextClass(clamped)}">{clamped}%</span>
     {#if hint}
       <span class="truncate text-[11px] text-muted-foreground">{hint}</span>
     {/if}

@@ -2,6 +2,12 @@ import { auth } from '$stores/auth';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? '/rpc' : 'http://localhost:8090');
 
+// Dev `/rpc` is a Vite proxy that still drops idle Connect follows after ~60s
+// (npm install, image push). Stream RPCs talk to the backend origin directly.
+const STREAM_BASE =
+  import.meta.env.VITE_LOG_STREAM_URL ??
+  (import.meta.env.DEV && !String(API_BASE).startsWith('http') ? 'http://localhost:8090' : API_BASE);
+
 export interface LogLine {
   podName: string;
   /** Kubelet timestamp, RFC 3339. Empty when the line had no parseable prefix. */
@@ -16,6 +22,15 @@ export interface StreamPodLogsOptions {
   tailLines?: number;
   follow?: boolean;
   /** Aborting this signal closes the HTTP request and ends the stream. */
+  signal?: AbortSignal;
+  /** Fired once the HTTP response is open, before the first line. */
+  onOpen?: () => void;
+}
+
+export interface StreamClusterLogsOptions {
+  clusterId: string;
+  tailLines?: number;
+  follow?: boolean;
   signal?: AbortSignal;
 }
 
@@ -57,6 +72,39 @@ const HEADER_BYTES = 5;
  * not a failure.
  */
 export async function* streamPodLogs(opts: StreamPodLogsOptions): AsyncGenerator<LogLine> {
+  yield* streamConnectLogLines(
+    '/idp.v1.ClusterService/StreamPodLogs',
+    {
+      namespace: opts.namespace,
+      podName: opts.podName,
+      container: opts.container ?? '',
+      tailLines: opts.tailLines ?? 0,
+      follow: opts.follow ?? true,
+    },
+    opts.signal,
+    opts.onOpen,
+  );
+}
+
+/** Live provisioner output, node logs, and Kubernetes events for a fleet cluster. */
+export async function* streamClusterLogs(opts: StreamClusterLogsOptions): AsyncGenerator<LogLine> {
+  yield* streamConnectLogLines(
+    '/idp.v1.ClusterService/StreamClusterLogs',
+    {
+      id: opts.clusterId,
+      tailLines: opts.tailLines ?? 200,
+      follow: opts.follow ?? true,
+    },
+    opts.signal,
+  );
+}
+
+async function* streamConnectLogLines(
+  procedure: string,
+  message: Record<string, unknown>,
+  signal?: AbortSignal,
+  onOpen?: () => void,
+): AsyncGenerator<LogLine> {
   const headers = new Headers({
     'Content-Type': 'application/connect+json',
     'Connect-Protocol-Version': '1',
@@ -66,15 +114,7 @@ export async function* streamPodLogs(opts: StreamPodLogsOptions): AsyncGenerator
     if (token) headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const payload = new TextEncoder().encode(
-    JSON.stringify({
-      namespace: opts.namespace,
-      podName: opts.podName,
-      container: opts.container ?? '',
-      tailLines: opts.tailLines ?? 0,
-      follow: opts.follow ?? true,
-    }),
-  );
+  const payload = new TextEncoder().encode(JSON.stringify(message));
 
   // The request body is itself an enveloped frame.
   const body = new Uint8Array(HEADER_BYTES + payload.length);
@@ -83,11 +123,12 @@ export async function* streamPodLogs(opts: StreamPodLogsOptions): AsyncGenerator
 
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}/idp.v1.ClusterService/StreamPodLogs`, {
+    response = await fetch(`${STREAM_BASE}${procedure}`, {
       method: 'POST',
       headers,
       body,
-      signal: opts.signal,
+      signal,
+      cache: 'no-store',
     });
   } catch (err: any) {
     if (err?.name === 'AbortError') return;
@@ -102,6 +143,8 @@ export async function* streamPodLogs(opts: StreamPodLogsOptions): AsyncGenerator
       detail?.code || 'unknown',
     );
   }
+
+  onOpen?.();
 
   const reader = response.body.getReader();
   // Typed over ArrayBufferLike because that is what the stream reader yields;
@@ -139,9 +182,14 @@ export async function* streamPodLogs(opts: StreamPodLogsOptions): AsyncGenerator
           return;
         }
 
-        const raw = JSON.parse(text);
+        let raw: { podName?: string; pod_name?: string; timestamp?: string; message?: string };
+        try {
+          raw = JSON.parse(text);
+        } catch {
+          throw new StreamError('Malformed log frame from server', 'internal');
+        }
         yield {
-          podName: raw.podName || '',
+          podName: raw.podName || raw.pod_name || '',
           timestamp: raw.timestamp || '',
           message: raw.message ?? '',
         };
@@ -161,8 +209,17 @@ export async function* streamPodLogs(opts: StreamPodLogsOptions): AsyncGenerator
 /** Bytes as delivered by a ReadableStream reader. */
 type ByteChunk = Uint8Array<ArrayBufferLike>;
 
+function copyBytes(src: ByteChunk): Uint8Array {
+  const out = new Uint8Array(src.length);
+  out.set(src);
+  return out;
+}
+
 function concat(a: ByteChunk, b: ByteChunk): ByteChunk {
-  if (a.length === 0) return b;
+  // ReadableStream chunks are views into a reused buffer. Holding the view
+  // across the next read() would let later chunks overwrite frames we have
+  // not parsed yet, which showed up as an empty viewer stuck on reconnecting.
+  if (a.length === 0) return copyBytes(b);
   const out = new Uint8Array(a.length + b.length);
   out.set(a, 0);
   out.set(b, a.length);

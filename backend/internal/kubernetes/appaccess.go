@@ -7,6 +7,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -42,8 +44,9 @@ const (
 	sessionIdleTimeout = 30 * time.Minute
 	// reapInterval is how often idle sessions are swept.
 	reapInterval = 30 * time.Second
-	// stickyPortBase/Count pick a stable localhost port per workload so a
-	// redeploy reconnects on the same 127.0.0.1:PORT the user already has open.
+	// stickyPortBase/Count pick a stable loopback port per workload so a
+	// redeploy can reconnect without opening a new listener. The browser is
+	// never sent to that port — HostHandler proxies *.localhost instead.
 	stickyPortBase  = 18000
 	stickyPortCount = 1000
 )
@@ -77,6 +80,9 @@ type AppAccess struct {
 	verifier TicketVerifier
 	mu       sync.Mutex
 	active   map[string]*appForward
+	// hosts maps "{ns}--{name}.localhost" onto a session key so the public
+	// hostname can reverse-proxy without exposing 127.0.0.1:18xxx.
+	hosts map[string]string
 	// stopReaper ends the janitor goroutine on shutdown.
 	stopReaper context.CancelFunc
 	// now is injectable so tests can advance time without sleeping.
@@ -99,6 +105,7 @@ func NewAppAccess(client *Client, verifier TicketVerifier) *AppAccess {
 		client:     client,
 		verifier:   verifier,
 		active:     make(map[string]*appForward),
+		hosts:      make(map[string]string),
 		stopReaper: cancel,
 		now:        time.Now,
 	}
@@ -111,15 +118,40 @@ func sessionKey(namespace, name string) string {
 	return namespace + "/" + name
 }
 
-// Handler serves GET /apps/{namespace}/{name}?ticket=... and redirects the
-// browser to a localhost port that is forwarded into the workload.
+// AppLocalHost is the browser hostname for a workload. Chrome/Firefox resolve
+// *.localhost to 127.0.0.1, so no /etc/hosts entry is required.
+//
+// A double hyphen separates namespace from name because both may already
+// contain hyphens (user-auth1 / user-web).
+func AppLocalHost(namespace, name string) string {
+	return strings.ToLower(strings.TrimSpace(namespace) + "--" + strings.TrimSpace(name) + ".localhost")
+}
+
+func requestHostName(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return strings.ToLower(h)
+	}
+	return strings.ToLower(host)
+}
+
+func requestListenPort(host string) string {
+	if _, p, err := net.SplitHostPort(host); err == nil && p != "" {
+		return p
+	}
+	return "80"
+}
+
+// Handler serves GET /apps/{namespace}/{name}?ticket=... , starts the
+// port-forward, and redirects the browser to http://{ns}--{name}.localhost:PORT/
+// on the IDP listen port. That host is reverse-proxied by HostHandler, so the
+// address bar stays on localhost and never shows 127.0.0.1:18xxx.
 //
 // Every request must present a ticket minted by the authenticated
 // CreateAppAccessTicket RPC, which is where the caller's permission to reach
 // this namespace was actually checked.
 func (a *AppAccess) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a == nil || a.client == nil {
+		if a == nil || !a.client.Available() {
 			http.Error(w, "kubernetes cluster not connected", http.StatusServiceUnavailable)
 			return
 		}
@@ -145,15 +177,123 @@ func (a *AppAccess) Handler() http.Handler {
 			return
 		}
 
+		// A leftover forward from the previous image would keep serving old
+		// HTML after a successful build. Always attach to the newest Ready pod.
+		a.resetForward(namespace, name)
+		if _, err := a.ensureForward(r, namespace, name); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		a.bindHost(namespace, name)
+		listen := requestListenPort(r.Host)
+		target := fmt.Sprintf("http://%s/", AppLocalHost(namespace, name))
+		if listen != "80" {
+			target = fmt.Sprintf("http://%s:%s/", AppLocalHost(namespace, name), listen)
+		}
+		http.Redirect(w, r, target, http.StatusFound)
+	})
+}
+
+// HostHandler reverse-proxies {ns}--{name}.localhost onto the local forward
+// so the tab stays on a localhost URL. Requests for any other host pass through.
+func (a *AppAccess) HostHandler(next http.Handler) http.Handler {
+	if a == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := requestHostName(r.Host)
+		if host == "" || host == "localhost" || host == "127.0.0.1" || !strings.HasSuffix(host, ".localhost") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		a.mu.Lock()
+		key, ok := a.hosts[host]
+		a.mu.Unlock()
+		if !ok {
+			http.Error(w, "this app is not open yet — use Open site from the IDP", http.StatusNotFound)
+			return
+		}
+
+		namespace, name, found := strings.Cut(key, "/")
+		if !found {
+			http.Error(w, "invalid app session", http.StatusBadGateway)
+			return
+		}
 		port, err := a.ensureForward(r, namespace, name)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-
-		target := fmt.Sprintf("http://127.0.0.1:%d/", port)
-		http.Redirect(w, r, target, http.StatusFound)
+		a.proxyToForward(w, r, port)
 	})
+}
+
+func (a *AppAccess) resetForward(namespace, name string) {
+	if a == nil {
+		return
+	}
+	key := sessionKey(namespace, name)
+	a.mu.Lock()
+	fwd, ok := a.active[key]
+	a.mu.Unlock()
+	if ok {
+		a.dropSession(key, fwd.stopCh)
+	}
+}
+
+func (a *AppAccess) proxyToForward(w http.ResponseWriter, r *http.Request, port uint16) {
+	target, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.FlushInterval = -1
+	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, proxyErr error) {
+		http.Error(rw, "app port-forward lost: "+proxyErr.Error(), http.StatusBadGateway)
+	}
+	proxy.ModifyResponse = applyAppProxyCacheHeaders
+	proxy.ServeHTTP(w, r)
+}
+
+// applyAppProxyCacheHeaders stops the browser from keeping a previous deploy's
+// index.html after Open site starts forwarding a new pod.
+func applyAppProxyCacheHeaders(resp *http.Response) error {
+	if resp == nil || resp.Request == nil {
+		return nil
+	}
+	path := resp.Request.URL.Path
+	ct := resp.Header.Get("Content-Type")
+	if path != "/" && path != "/index.html" && !strings.HasSuffix(path, "/index.html") && !strings.Contains(ct, "text/html") {
+		return nil
+	}
+	resp.Header.Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	resp.Header.Set("Pragma", "no-cache")
+	resp.Header.Del("ETag")
+	resp.Header.Del("Last-Modified")
+	return nil
+}
+
+func (a *AppAccess) bindHost(namespace, name string) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.hosts == nil {
+		a.hosts = make(map[string]string)
+	}
+	a.hosts[AppLocalHost(namespace, name)] = sessionKey(namespace, name)
+}
+
+func (a *AppAccess) unbindHostsForKeyLocked(key string) {
+	for host, mapped := range a.hosts {
+		if mapped == key {
+			delete(a.hosts, host)
+		}
+	}
 }
 
 // Close stops every active port-forward and the reaper. Safe to call twice.
@@ -170,6 +310,7 @@ func (a *AppAccess) Close() {
 	for key, fwd := range a.active {
 		close(fwd.stopCh)
 		delete(a.active, key)
+		a.unbindHostsForKeyLocked(key)
 	}
 }
 
@@ -197,6 +338,7 @@ func (a *AppAccess) reapIdle() {
 		if fwd.lastUsed.Before(cutoff) {
 			close(fwd.stopCh)
 			delete(a.active, key)
+			a.unbindHostsForKeyLocked(key)
 		}
 	}
 }
@@ -216,6 +358,7 @@ func (a *AppAccess) evictOldestLocked() {
 	if oldestKey != "" {
 		close(a.active[oldestKey].stopCh)
 		delete(a.active, oldestKey)
+		a.unbindHostsForKeyLocked(oldestKey)
 	}
 }
 
@@ -233,10 +376,8 @@ func (a *AppAccess) ensureForward(r *http.Request, namespace, name string) (uint
 		podName := existing.podName
 		a.mu.Unlock()
 
-		// Rollouts replace pods; the SPDY stream often keeps the local socket
-		// open while forwarding into a deleted container (NX / connection reset
-		// in the browser). Drop the stale session and rebuild on the sticky port.
-		if podName != "" && a.podReady(r.Context(), namespace, podName) {
+		_, newest, resolveErr := a.resolveTarget(r, namespace, name)
+		if resolveErr == nil && podName != "" && podName == newest && a.podReady(r.Context(), namespace, podName) {
 			return port, nil
 		}
 		a.dropSession(key, existing.stopCh)
@@ -282,6 +423,10 @@ func (a *AppAccess) ensureForward(r *http.Request, namespace, name string) (uint
 		namespace: namespace,
 		lastUsed:  a.now(),
 	}
+	if a.hosts == nil {
+		a.hosts = make(map[string]string)
+	}
+	a.hosts[AppLocalHost(namespace, name)] = key
 
 	// Keep the sticky localhost port alive across rollouts: when the attached
 	// pod disappears, tear down and reattach to a Ready replacement without
@@ -307,10 +452,13 @@ func (a *AppAccess) maintainStickyForward(
 		case <-stopCh:
 			return
 		case <-ticker.C:
-			if a.podReady(context.Background(), namespace, podName) {
+			currentReady := a.podReady(context.Background(), namespace, podName)
+			req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
+			_, newest, resolveErr := a.resolveTarget(req, namespace, name)
+			if currentReady && (resolveErr != nil || newest == podName) {
 				continue
 			}
-			// Pod gone (or not Ready). Drop this session if it is still ours.
+			// Pod gone, or a newer Ready replica exists after a rollout.
 			a.dropSession(key, stopCh)
 
 			// Rebuild only if nothing else claimed the key in the meantime.
@@ -321,8 +469,6 @@ func (a *AppAccess) maintainStickyForward(
 				return
 			}
 
-			// Synthetic request context for resolve/start — no client cancel.
-			req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 			remotePort, newPod, err := a.resolveTarget(req, namespace, name)
 			if err != nil {
 				return
@@ -351,6 +497,10 @@ func (a *AppAccess) maintainStickyForward(
 				namespace: namespace,
 				lastUsed:  a.now(),
 			}
+			if a.hosts == nil {
+				a.hosts = make(map[string]string)
+			}
+			a.hosts[AppLocalHost(namespace, name)] = key
 			a.mu.Unlock()
 
 			// Continue watching the replacement pod.
@@ -367,13 +517,14 @@ func (a *AppAccess) dropSession(key string, stopCh chan struct{}) {
 	if cur, ok := a.active[key]; ok && cur.stopCh == stopCh {
 		close(cur.stopCh)
 		delete(a.active, key)
+		a.unbindHostsForKeyLocked(key)
 	}
 }
 
 // podReady reports whether the named pod still exists and is Ready. Used to
 // invalidate Open App forwards after rollout / rollback replaces the pod set.
 func (a *AppAccess) podReady(ctx context.Context, namespace, podName string) bool {
-	if a == nil || a.client == nil || podName == "" {
+	if a == nil || !a.client.Available() || podName == "" {
 		return false
 	}
 	pod, err := a.client.Clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
@@ -484,29 +635,47 @@ func (a *AppAccess) resolveTarget(r *http.Request, namespace, name string) (int3
 		return 0, "", fmt.Errorf("list pods: %w", err)
 	}
 
-	podName := ""
-	for i := range pods.Items {
-		p := &pods.Items[i]
-		if p.Status.Phase != corev1.PodRunning {
-			continue
-		}
-		ready := false
-		for _, c := range p.Status.Conditions {
-			if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
-				ready = true
-				break
-			}
-		}
-		if ready || len(p.Status.Conditions) == 0 {
-			podName = p.Name
-			break
-		}
-	}
+	podName := newestReadyPodName(pods.Items)
 	if podName == "" {
 		return 0, "", fmt.Errorf("no running pod found for %s/%s", namespace, name)
 	}
 
 	return remotePort, podName, nil
+}
+
+func newestReadyPodName(pods []corev1.Pod) string {
+	var best *corev1.Pod
+	for i := range pods {
+		p := &pods[i]
+		if !isPodReadyForForward(p) {
+			continue
+		}
+		if best == nil || p.CreationTimestamp.Time.After(best.CreationTimestamp.Time) {
+			best = p
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	return best.Name
+}
+
+func isPodReadyForForward(p *corev1.Pod) bool {
+	if p == nil || p.DeletionTimestamp != nil {
+		return false
+	}
+	if p.Status.Phase != corev1.PodRunning {
+		return false
+	}
+	if len(p.Status.Conditions) == 0 {
+		return true
+	}
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *AppAccess) newPortForward(

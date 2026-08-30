@@ -51,7 +51,7 @@ func NewService(
 }
 
 func (s *Service) requireK8s() error {
-	if s.k8s == nil {
+	if !s.k8s.Available() {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
 	}
 	return nil
@@ -127,6 +127,18 @@ func resourcesFromProto(r *idpv1.ResourceLimits) kubernetes.ResourceSpec {
 		CPULimit:      strings.TrimSpace(r.CpuLimit),
 		MemoryRequest: strings.TrimSpace(r.MemoryRequest),
 		MemoryLimit:   strings.TrimSpace(r.MemoryLimit),
+	}
+}
+
+func autoscalingFromProto(a *idpv1.Autoscaling) kubernetes.AutoscalingSpec {
+	if a == nil {
+		return kubernetes.AutoscalingSpec{}
+	}
+	return kubernetes.AutoscalingSpec{
+		MinReplicas:  a.MinReplicas,
+		MaxReplicas:  a.MaxReplicas,
+		CPUTarget:    a.CpuAverageUtilization,
+		MemoryTarget: a.MemoryAverageUtilization,
 	}
 }
 
@@ -225,7 +237,14 @@ func (s *Service) Create(ctx context.Context, req *idpv1.CreateDeploymentRequest
 	}
 	serviceType := kubernetes.NormalizeServiceType(req.ServiceType)
 
+	dbEngine, isDatabase := dbadmin.EngineForImage(req.Image)
+
 	resources := resourcesFromProto(req.Resources)
+	autoscaling := autoscalingFromProto(req.Autoscaling)
+	if isDatabase {
+		autoscaling = kubernetes.AutoscalingSpec{}
+	}
+	resources = kubernetes.EnsureRequestsForHPA(resources, autoscaling)
 	if err := resources.Validate(); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -239,7 +258,6 @@ func (s *Service) Create(ctx context.Context, req *idpv1.CreateDeploymentRequest
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
-	dbEngine, isDatabase := dbadmin.EngineForImage(req.Image)
 	ingressDisabled := req.IngressDisabled || isDatabase
 
 	// Resolved before anything is created so an invalid custom hostname fails
@@ -317,6 +335,7 @@ func (s *Service) Create(ctx context.Context, req *idpv1.CreateDeploymentRequest
 		Resources:             resources,
 		PersistentVolumeClaim: pvcName,
 		MountPath:             mountPath,
+		Autoscaling:           autoscaling,
 	}
 
 	// Recorded as a label so it is visible in the cluster, not just in the
@@ -678,6 +697,14 @@ func (s *Service) Scale(ctx context.Context, req *idpv1.ScaleDeploymentRequest) 
 	if err != nil {
 		s.audit.RecordFromUser(ctx, "deployment.scale", req.Namespace, req.Name, "deployment", "failure", map[string]any{"error": err.Error()})
 		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if req.Autoscaling != nil {
+		spec := autoscalingFromProto(req.Autoscaling)
+		if err := s.k8s.ApplyAutoscaling(ctx, req.Namespace, req.Name, spec); err != nil {
+			s.audit.RecordFromUser(ctx, "deployment.scale", req.Namespace, req.Name, "deployment", "failure", map[string]any{"error": err.Error()})
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("apply autoscaling: %w", err))
+		}
+		deployment.Autoscaling = spec
 	}
 
 	s.audit.RecordFromUser(ctx, "deployment.scale", req.Namespace, req.Name, "deployment", "success", map[string]any{"replicas": req.Replicas})

@@ -129,6 +129,10 @@ func NormalizeGitRef(branch string) string {
 
 // CreateBuildJob creates the git-token Secret and the Kaniko Job.
 func (c *Client) CreateBuildJob(ctx context.Context, spec BuildJobSpec) error {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
 	if spec.KanikoImage == "" {
 		spec.KanikoImage = DefaultKanikoImage
 	}
@@ -165,7 +169,7 @@ func (c *Client) CreateBuildJob(ctx context.Context, spec BuildJobSpec) error {
 				"git-password": pass,
 			},
 		}
-		if _, err := c.Clientset.CoreV1().Secrets(spec.Namespace).
+		if _, err := cs.CoreV1().Secrets(spec.Namespace).
 			Create(ctx, tokenSecret, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("create git token secret: %w", err)
 		}
@@ -176,7 +180,7 @@ func (c *Client) CreateBuildJob(ctx context.Context, spec BuildJobSpec) error {
 		return err
 	}
 
-	if _, err := c.Clientset.BatchV1().Jobs(spec.Namespace).
+	if _, err := cs.BatchV1().Jobs(spec.Namespace).
 		Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			return nil // idempotent: the reconciler may retry after a restart
@@ -211,7 +215,7 @@ func buildKanikoJob(spec BuildJobSpec, labels map[string]string) (*batchv1.Job, 
 		// Layer caching across builds; without it every build re-runs the full
 		// dependency install.
 		"--cache=true",
-		"--verbosity=info",
+		"--verbosity=debug",
 	}
 	if buildContext != "" && buildContext != "." {
 		args = append(args, "--context-sub-path="+buildContext)
@@ -254,6 +258,10 @@ func buildKanikoJob(spec BuildJobSpec, labels map[string]string) (*batchv1.Job, 
 		// keeps the args identical between the two paths.
 		env = append(env, corev1.EnvVar{Name: "CLONE_URL", Value: stripScheme(public)})
 	}
+	env = append(env,
+		corev1.EnvVar{Name: "NO_COLOR", Value: "1"},
+		corev1.EnvVar{Name: "TERM", Value: "dumb"},
+	)
 
 	volumes := []corev1.Volume{}
 	mounts := []corev1.VolumeMount{}
@@ -336,7 +344,11 @@ type BuildJobStatus struct {
 
 // GetBuildJobStatus inspects a build Job.
 func (c *Client) GetBuildJobStatus(ctx context.Context, namespace, jobName string) (BuildJobStatus, error) {
-	job, err := c.Clientset.BatchV1().Jobs(namespace).Get(ctx, jobName, metav1.GetOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return BuildJobStatus{}, csErr
+	}
+	job, err := cs.BatchV1().Jobs(namespace).Get(ctx, jobName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return BuildJobStatus{Missing: true, Finished: true, Reason: "build job no longer exists"}, nil
 	}
@@ -377,7 +389,11 @@ func (c *Client) GetBuildJobStatus(ctx context.Context, namespace, jobName strin
 
 // buildPodName finds the pod backing a Job, which is where its logs are.
 func (c *Client) buildPodName(ctx context.Context, namespace, jobName string) string {
-	pods, err := c.Clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return ""
+	}
+	pods, err := cs.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "job-name=" + jobName,
 	})
 	if err != nil || len(pods.Items) == 0 {
@@ -389,13 +405,17 @@ func (c *Client) buildPodName(ctx context.Context, namespace, jobName string) st
 // buildFailureDetail returns the container's terminated reason, which carries
 // the actual cause when a build fails.
 func (c *Client) buildFailureDetail(ctx context.Context, namespace, podName string) string {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return ""
+	}
 	if podName == "" {
 		return ""
 	}
 	if line := c.kanikoErrorLine(ctx, namespace, podName); line != "" {
 		return humanizeKanikoError(line)
 	}
-	pod, err := c.Clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	pod, err := cs.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		return ""
 	}
@@ -413,8 +433,12 @@ func (c *Client) buildFailureDetail(ctx context.Context, namespace, podName stri
 // kanikoErrorLine scans recent logs for the first Kaniko error line. The last
 // line is often executor help text, which is useless in the UI.
 func (c *Client) kanikoErrorLine(ctx context.Context, namespace, pod string) string {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return ""
+	}
 	tail := int64(200)
-	stream, err := c.Clientset.CoreV1().Pods(namespace).
+	stream, err := cs.CoreV1().Pods(namespace).
 		GetLogs(pod, &corev1.PodLogOptions{TailLines: &tail}).Stream(ctx)
 	if err != nil {
 		return ""
@@ -451,8 +475,12 @@ func humanizeKanikoError(line string) string {
 
 // DeleteBuildJob removes a Job, its pods and its git token Secret.
 func (c *Client) DeleteBuildJob(ctx context.Context, namespace, jobName string) error {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
 	policy := metav1.DeletePropagationBackground
-	err := c.Clientset.BatchV1().Jobs(namespace).Delete(ctx, jobName, metav1.DeleteOptions{
+	err := cs.BatchV1().Jobs(namespace).Delete(ctx, jobName, metav1.DeleteOptions{
 		// Without background propagation the Job is removed while its pods
 		// linger as orphans.
 		PropagationPolicy: &policy,
@@ -464,7 +492,11 @@ func (c *Client) DeleteBuildJob(ctx context.Context, namespace, jobName string) 
 }
 
 func (c *Client) deleteGitTokenSecret(ctx context.Context, namespace, jobName string) error {
-	err := c.Clientset.CoreV1().Secrets(namespace).
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
+	err := cs.CoreV1().Secrets(namespace).
 		Delete(ctx, gitTokenSecretName(jobName), metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete git token secret: %w", err)
@@ -474,13 +506,17 @@ func (c *Client) deleteGitTokenSecret(ctx context.Context, namespace, jobName st
 
 // EnsureBuildNamespace creates the namespace build Jobs run in.
 func (c *Client) EnsureBuildNamespace(ctx context.Context, name string) error {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   name,
 			Labels: map[string]string{LabelManagedBy: "true"},
 		},
 	}
-	_, err := c.Clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	_, err := cs.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create build namespace: %w", err)
 	}
@@ -491,7 +527,11 @@ func (c *Client) EnsureBuildNamespace(ctx context.Context, name string) error {
 // pipeline. Returns false when the image is already current, so an unchanged
 // rebuild does not roll pods for nothing.
 func (c *Client) SetDeploymentImage(ctx context.Context, namespace, name, image string) (bool, error) {
-	api := c.Clientset.AppsV1().Deployments(namespace)
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return false, csErr
+	}
+	api := cs.AppsV1().Deployments(namespace)
 
 	deployment, err := api.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {

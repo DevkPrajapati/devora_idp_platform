@@ -10,6 +10,6 @@
   let { class: className = '', children }: Props = $props();
 </script>
 
-<div class={cn('p-6 pt-0', className)}>
+<div class={cn('p-4 sm:p-5 [&:not(:first-child)]:pt-0', className)}>
   {@render children?.()}
 </div>

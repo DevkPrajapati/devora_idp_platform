@@ -105,7 +105,7 @@ func NewService(
 func (s *Service) BuildNamespace() string { return s.cfg.Namespace }
 
 func (s *Service) requireK8s() error {
-	if s.k8s == nil {
+	if !s.k8s.Available() {
 		return connect.NewError(connect.CodeFailedPrecondition, errors.New("kubernetes cluster not connected"))
 	}
 	return nil
@@ -296,8 +296,10 @@ func (s *Service) TriggerBuild(ctx context.Context, req *idpv1.TriggerBuildReque
 	return &idpv1.TriggerBuildResponse{Build: buildToProto(record, repo.Name)}, nil
 }
 
-// RetryBuild re-runs a previous build's branch and commit.
+// RetryBuild re-runs a previous build's branch at current HEAD.
 //
+// The previous commit SHA is not reused: pinning it would rebuild old code
+// after the user has already pushed, which is the usual reason they hit Retry.
 // A retry is a new row rather than a reset of the old one, so the history shows
 // that a retry happened and what each attempt produced.
 func (s *Service) RetryBuild(ctx context.Context, req *idpv1.RetryBuildRequest) (*idpv1.RetryBuildResponse, error) {
@@ -319,7 +321,7 @@ func (s *Service) RetryBuild(ctx context.Context, req *idpv1.RetryBuildRequest) 
 		return nil, connect.NewError(connect.CodeNotFound, errors.New("build not found"))
 	}
 
-	record, err := s.startBuild(ctx, repo, previous.Branch, previous.CommitSha, TriggerRetry, user.Email, previous.ID)
+	record, err := s.startBuild(ctx, repo, previous.Branch, "", TriggerRetry, user.Email, previous.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -542,7 +544,7 @@ func (s *Service) HandleWebhook(ctx context.Context, repositoryID string, body [
 // short poll is simpler than a watch that must be re-established after every
 // disconnect, and it recovers automatically after a backend restart.
 func (s *Service) Reconcile(ctx context.Context) {
-	if s.k8s == nil {
+	if !s.k8s.Available() {
 		return
 	}
 

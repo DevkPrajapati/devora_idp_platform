@@ -1,161 +1,397 @@
 <script lang="ts">
-  import LogViewer from '$components/LogViewer.svelte';
-  import { listPods, getPodLogs } from '$services/cluster';
-  import { buildJobName, isBuildActive, type Build } from '$services/builds';
-  import { Loader2, Terminal, X, CheckCircle2, AlertCircle, Radio } from '@lucide/svelte';
+  import { untrack } from 'svelte';
+  import {
+    streamPodLogs,
+    StreamError,
+    type LogLine,
+  } from '$services/logstream';
+  import LogLineRow from '$components/ui/LogLine.svelte';
+  import { liveClock } from '$stores/clock';
+  import { formatClock, stripAnsi } from '$lib/log-style';
+  import { listPods, getPodLogs, listEvents } from '$services/cluster';
+  import { activityLog, matchesActivityScope } from '$stores/activitylog';
+  import {
+    buildJobName,
+    isBuildActive,
+    matchBuildPodName,
+    type Build,
+  } from '$services/builds';
+  import {
+    AlertCircle,
+    CheckCircle2,
+    Pause,
+    Play,
+    Radio,
+    RefreshCw,
+    Terminal,
+  } from '@lucide/svelte';
 
   interface Props {
     build: Build;
     namespace: string;
-    onClose?: () => void;
   }
 
-  let { build, namespace, onClose }: Props = $props();
+  let { build, namespace }: Props = $props();
 
-  interface FeedLine {
-    id: number;
-    at: string;
-    kind: 'info' | 'success' | 'error' | 'log';
-    text: string;
-  }
+  const MAX_LINES = 5000;
+  const RECONNECT_DELAYS = [1000, 2000, 3000, 5000];
 
+  let lines = $state<LogLine[]>([]);
+  let paused = $state(false);
+  let autoScroll = $state(true);
+  let pausedCount = $state(0);
+  let status = $state<'connecting' | 'streaming' | 'reconnecting' | 'ended' | 'error'>('connecting');
+  let statusHint = $state('Opening live log stream…');
   let podName = $state('');
-  let podError = $state('');
-  let resolving = $state(true);
-  let waitMessage = $state('Starting build…');
-  let feed = $state<FeedLine[]>([]);
-  let nextId = 0;
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
-  let lastReportedStatus = $state('');
+  let errorMsg = $state('');
+
+  let logEl = $state<HTMLDivElement | null>(null);
+  let pausedBuffer: LogLine[] = [];
+  let seenKeys = new Set<string>();
+  let seenActivity = new Set<number>();
+  let controller: AbortController | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastReportedStatus = '';
+  let lastErrorMessage = '';
+  let streamAttempt = 0;
+  let findGeneration = 0;
+  let streamGeneration = 0;
+  let startedAt = $state(Date.now());
+  const elapsedSec = $derived(Math.max(0, Math.round(($liveClock - startedAt) / 1000)));
 
   function jobName(): string {
     return build.jobName || buildJobName(build.repositoryName, build.number);
   }
 
-  function pushFeed(kind: FeedLine['kind'], text: string) {
-    feed = [...feed, {
-      id: ++nextId,
-      at: new Date().toLocaleTimeString(undefined, { hour12: false }),
-      kind,
-      text,
-    }].slice(-200);
+  function lineKey(line: LogLine): string {
+    return `${line.timestamp}|${line.podName}|${line.message}`;
   }
 
-  async function resolvePod(): Promise<string> {
-    const prefix = jobName() + '-';
-    const pods = await listPods(namespace);
-    const match = pods.find((p) => p.name === jobName() || p.name.startsWith(prefix));
-    return match?.name ?? '';
-  }
+  function append(line: LogLine) {
+    line = { ...line, message: stripAnsi(line.message) };
+    const key = lineKey(line);
+    if (seenKeys.has(key)) return;
+    seenKeys.add(key);
 
-  async function loadHistoricalLogs(name: string) {
-    try {
-      const logs = await getPodLogs(namespace, name, 300);
-      if (!logs.trim()) return;
-      for (const line of logs.split('\n').slice(-80)) {
-        if (line.trim()) pushFeed('log', line);
-      }
-    } catch {
-      // Historical logs are best-effort for finished builds.
+    if (paused) {
+      pausedBuffer.push(line);
+      if (pausedBuffer.length > MAX_LINES) pausedBuffer.shift();
+      pausedCount = pausedBuffer.length;
+      return;
+    }
+    lines.push(line);
+    if (lines.length > MAX_LINES) {
+      const dropped = lines.splice(0, lines.length - MAX_LINES);
+      for (const old of dropped) seenKeys.delete(lineKey(old));
     }
   }
 
-  let attachGeneration = 0;
+  function appendSystem(message: string) {
+    append({
+      podName: 'idp',
+      timestamp: new Date().toISOString(),
+      message,
+    });
+  }
 
-  async function attach(myGeneration: number) {
-    resolving = true;
-    podError = '';
-    podName = '';
-    feed = [];
-    pushFeed('info', `Build #${build.number} queued on branch ${build.branch}.`);
-
-    const deadline = Date.now() + (isBuildActive(build.status) ? 180_000 : 10_000);
-    while (Date.now() < deadline) {
-      // Leaving the Builds page must stop this loop — otherwise ListPods keeps
-      // firing and state updates fight the router after unmount.
-      if (myGeneration !== attachGeneration) return;
-      try {
-        const found = await resolvePod();
-        if (myGeneration !== attachGeneration) return;
-        if (found) {
-          podName = found;
-          pushFeed('success', `Build pod ${found} is running — streaming logs below.`);
-          if (!isBuildActive(build.status)) {
-            await loadHistoricalLogs(found);
-          }
-          if (myGeneration !== attachGeneration) return;
-          resolving = false;
-          return;
-        }
-      } catch (err: any) {
-        if (myGeneration !== attachGeneration) return;
-        podError = err?.message || 'Could not reach the cluster';
-        resolving = false;
-        return;
-      }
-
-      if (!isBuildActive(build.status)) break;
-      waitMessage = 'Waiting for Kaniko pod to start…';
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-
-    if (myGeneration !== attachGeneration) return;
-    resolving = false;
-    if (isBuildActive(build.status)) {
-      podError = 'Build pod has not appeared yet. The panel keeps polling while the build is active.';
-    } else {
-      podError = 'Build pod not found. It may have been garbage-collected after the job finished.';
-    }
+  function scrollToBottom() {
+    if (autoScroll && logEl) logEl.scrollTop = logEl.scrollHeight;
   }
 
   $effect(() => {
-    const myGeneration = ++attachGeneration;
-    void attach(myGeneration);
+    void lines.length;
+    scrollToBottom();
+  });
 
-    pollTimer = setInterval(async () => {
-      if (myGeneration !== attachGeneration) return;
-      if (podName || !isBuildActive(build.status)) return;
-      const found = await resolvePod().catch(() => '');
-      if (myGeneration !== attachGeneration || !found) return;
-      podName = found;
-      pushFeed('success', `Build pod ${found} is running — streaming logs below.`);
-      resolving = false;
-    }, 3000);
+  function onScroll() {
+    if (!logEl) return;
+    autoScroll = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+  }
+
+  async function resolvePod(): Promise<string> {
+    const pods = await listPods(namespace, 'idp-build');
+    return matchBuildPodName(pods.map((p) => p.name), jobName());
+  }
+
+  async function ingestEvents() {
+    if (!namespace) return;
+    const job = jobName();
+    const pod = podName;
+    try {
+      const events = await listEvents(namespace, 40);
+      for (const event of events) {
+        const object = event.object || '';
+        if (job && !object.includes(job) && !(pod && object.includes(pod))) continue;
+        const prefix = event.reason ? `${event.reason}: ` : '';
+        append({
+          podName: 'event',
+          timestamp: event.timestamp || new Date().toISOString(),
+          message: `${prefix}${event.message}`.trim(),
+        });
+      }
+    } catch {
+      // Events are extra context; the Kaniko stream is the source of truth.
+    }
+  }
+
+  async function seedPodLogs(name: string) {
+    try {
+      const text = await getPodLogs(namespace, name, 400);
+      if (!text.trim()) return;
+      for (const row of text.split('\n')) {
+        if (row === '') continue;
+        append({ podName: name, timestamp: '', message: row });
+      }
+    } catch {
+      // Follow is still retrying.
+    }
+  }
+
+  async function findPodLoop(myGeneration: number) {
+    if (!namespace) {
+      status = 'error';
+      errorMsg = 'Build namespace is not configured, so job logs cannot be streamed yet.';
+      appendSystem(errorMsg);
+      return;
+    }
+
+    status = 'connecting';
+    statusHint = 'Waiting for the build pod… clone, compile, and push output will appear here.';
+    appendSystem(`Build #${build.number} ${build.status} on ${build.branch} — watching ${jobName()}.`);
+    if (build.errorMessage) appendSystem(build.errorMessage);
+
+    while (myGeneration === findGeneration) {
+      try {
+        const found = await resolvePod();
+        if (myGeneration !== findGeneration) return;
+        if (found) {
+          if (podName !== found) {
+            podName = found;
+            appendSystem(`Build pod ${found} — attaching live stream.`);
+          }
+          statusHint = `Streaming ${found}`;
+          return;
+        }
+      } catch (err: any) {
+        if (myGeneration !== findGeneration) return;
+        errorMsg = err?.message || 'Could not list build pods';
+        statusHint = errorMsg;
+        appendSystem(errorMsg);
+        await new Promise((r) => setTimeout(r, 800));
+        continue;
+      }
+
+      await ingestEvents();
+      if (!isBuildActive(build.status) && Date.now() - startedAt > 8_000) {
+        statusHint = 'Build finished before a pod was found. Showing job events and error above.';
+        if (build.errorMessage) {
+          status = 'ended';
+          return;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+
+  async function followLogs(myGeneration: number, ns: string, pod: string) {
+    controller?.abort();
+    controller = new AbortController();
+    if (streamAttempt > 0) {
+      status = 'reconnecting';
+      statusHint = `Reconnecting to ${pod}…`;
+    } else if (status !== 'streaming') {
+      status = 'connecting';
+      statusHint = `Connecting to ${pod}…`;
+    }
+    errorMsg = '';
+
+    try {
+      for await (const line of streamPodLogs({
+        namespace: ns,
+        podName: pod,
+        container: 'kaniko',
+        follow: true,
+        tailLines: 200,
+        signal: controller.signal,
+        onOpen: () => {
+          if (myGeneration !== streamGeneration) return;
+          status = 'streaming';
+          statusHint = `Live · ${pod}`;
+          streamAttempt = 0;
+          errorMsg = '';
+        },
+      })) {
+        if (myGeneration !== streamGeneration) return;
+        status = 'streaming';
+        statusHint = `Live · ${pod}`;
+        streamAttempt = 0;
+        errorMsg = '';
+        append(line);
+      }
+
+      if (myGeneration !== streamGeneration) return;
+      if (lines.length === 0) await seedPodLogs(pod);
+      if (isBuildActive(build.status)) {
+        await new Promise((r) => setTimeout(r, 250));
+        if (myGeneration !== streamGeneration) return;
+        void followLogs(myGeneration, ns, pod);
+        return;
+      }
+      status = 'ended';
+      statusHint = `Container exited · ${pod}`;
+      appendSystem(`Log stream ended (${build.status}).`);
+    } catch (err: any) {
+      if (myGeneration !== streamGeneration) return;
+      if (err?.name === 'AbortError') return;
+
+      errorMsg = err?.message || 'Log stream failed';
+      if (err instanceof StreamError && (err.code === 'unauthenticated' || err.code === 'permission_denied')) {
+        status = 'error';
+        statusHint = errorMsg;
+        appendSystem(errorMsg);
+        return;
+      }
+
+      if (lines.length === 0) await seedPodLogs(pod);
+      if (isBuildActive(build.status)) {
+        scheduleReconnect(myGeneration, ns, pod);
+        return;
+      }
+      status = 'ended';
+      statusHint = errorMsg;
+      appendSystem(errorMsg);
+    }
+  }
+
+  function scheduleReconnect(myGeneration: number, ns: string, pod: string) {
+    status = 'reconnecting';
+    statusHint = `Waiting for more output from ${pod}…`;
+    const delay = RECONNECT_DELAYS[Math.min(streamAttempt, RECONNECT_DELAYS.length - 1)];
+    streamAttempt += 1;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (myGeneration !== streamGeneration) return;
+      void followLogs(myGeneration, ns, pod);
+    }, delay);
+  }
+
+  // Find the Job pod once per job identity. Status polls must not tear this down
+  // or the viewer resets to 0 lines every 2.5s.
+  $effect(() => {
+    const ns = namespace;
+    const job = jobName();
+    void ns;
+    void job;
+    startedAt = Date.now();
+    lines = [];
+    seenKeys = new Set();
+    seenActivity = new Set();
+    pausedBuffer = [];
+    podName = '';
+    lastReportedStatus = '';
+    lastErrorMessage = '';
+    const myGeneration = ++findGeneration;
+    untrack(() => {
+      void findPodLoop(myGeneration);
+    });
 
     return () => {
-      attachGeneration += 1;
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
+      findGeneration += 1;
+    };
+  });
+
+  $effect(() => {
+    const ns = namespace;
+    const pod = podName;
+    if (!ns || !pod) return;
+    const myGeneration = ++streamGeneration;
+    streamAttempt = 0;
+    untrack(() => {
+      void followLogs(myGeneration, ns, pod);
+    });
+    return () => {
+      streamGeneration += 1;
+      controller?.abort();
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
       }
     };
   });
 
   $effect(() => {
-    if (build.status === lastReportedStatus) return;
-    lastReportedStatus = build.status;
-    if (build.status === 'succeeded') {
-      pushFeed('success', `Build #${build.number} succeeded — image ${build.imageTag || 'tagged'}.`);
-    } else if (build.status === 'failed') {
-      pushFeed('error', build.errorMessage || `Build #${build.number} failed.`);
-    }
+    const prefixes = [`build:${build.repositoryName}`, `build:${build.repositoryName}#${build.number}`];
+    const unsub = activityLog.subscribe((rows) => {
+      for (const row of rows) {
+        if (seenActivity.has(row.id)) continue;
+        if (!matchesActivityScope(row.scope, prefixes) && row.scope !== prefixes[0]) continue;
+        seenActivity.add(row.id);
+        const tag = row.level === 'error' ? 'ERROR ' : row.level === 'success' ? 'OK ' : '';
+        append({ podName: 'idp', timestamp: row.at, message: tag + row.message });
+      }
+    });
+    return unsub;
   });
+
+  $effect(() => {
+    const nextStatus = build.status;
+    const nextError = build.errorMessage;
+    untrack(() => {
+      if (nextStatus !== lastReportedStatus) {
+        lastReportedStatus = nextStatus;
+        appendSystem(`Build status → ${nextStatus}.`);
+        if (nextStatus === 'succeeded') {
+          appendSystem(`Image ${build.imageTag || 'tagged'} pushed.`);
+          status = 'ended';
+        } else if (nextStatus === 'failed') {
+          statusHint = nextError || 'Build failed';
+        }
+      }
+      if (nextError && nextError !== lastErrorMessage) {
+        lastErrorMessage = nextError;
+        appendSystem(nextError);
+      }
+    });
+  });
+
+  function resume() {
+    paused = false;
+    if (pausedBuffer.length > 0) {
+      for (const line of pausedBuffer) {
+        lines.push(line);
+      }
+      if (lines.length > MAX_LINES) lines.splice(0, lines.length - MAX_LINES);
+      pausedBuffer = [];
+      pausedCount = 0;
+    }
+  }
+
+  function reconnect() {
+    streamAttempt = 0;
+    errorMsg = '';
+    if (podName && namespace) {
+      controller?.abort();
+      void followLogs(streamGeneration, namespace, podName);
+      return;
+    }
+    void findPodLoop(findGeneration);
+  }
 </script>
 
-<div class="rounded-lg border border-border bg-card">
-  <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
-    <div class="flex items-center gap-2">
-      <Terminal class="h-4 w-4 text-primary" />
-      <div>
+<div class="space-y-3">
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <div class="flex min-w-0 items-center gap-2">
+      <Terminal class="h-4 w-4 shrink-0 text-primary" />
+      <div class="min-w-0">
         <p class="text-sm font-semibold">Build #{build.number} — {build.branch}</p>
-        <p class="text-xs text-muted-foreground font-mono">{jobName()}</p>
+        <p class="truncate font-mono text-[11px] text-muted-foreground">{jobName()}{podName ? ` · ${podName}` : ''}</p>
       </div>
     </div>
     <div class="flex items-center gap-2">
       {#if isBuildActive(build.status)}
         <span class="inline-flex items-center gap-1 rounded-full bg-indigo-500/10 px-2 py-0.5 text-xs font-medium text-indigo-500">
           <Radio class="h-3 w-3 animate-pulse" />
-          live
+          live · {elapsedSec}s
         </span>
       {:else if build.status === 'succeeded'}
         <span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-500">
@@ -168,52 +404,82 @@
           failed
         </span>
       {/if}
-      {#if onClose}
-        <button onclick={onClose} aria-label="Close" class="rounded-md p-1 text-muted-foreground hover:bg-accent">
-          <X class="h-4 w-4" />
-        </button>
-      {/if}
     </div>
   </div>
 
-  <div class="grid gap-0 lg:grid-cols-[minmax(16rem,22rem)_1fr]">
-    <div class="max-h-80 overflow-y-auto border-b border-border p-3 lg:max-h-[28rem] lg:border-b-0 lg:border-r">
-      <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Activity</p>
-      <ul class="space-y-2">
-        {#each feed as line (line.id)}
-          <li class="text-xs">
-            <span class="font-mono text-muted-foreground">{line.at}</span>
-            <p class={
-              line.kind === 'success' ? 'text-emerald-600 dark:text-emerald-400' :
-              line.kind === 'error' ? 'text-destructive' :
-              line.kind === 'log' ? 'font-mono text-[11px] text-muted-foreground break-all' :
-              'text-foreground'
-            }>{line.text}</p>
-          </li>
-        {/each}
-      </ul>
-    </div>
-
-    <div class="p-3">
-      {#if resolving}
-        <div class="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-8 text-sm text-muted-foreground">
-          <Loader2 class="h-4 w-4 animate-spin" />
-          {waitMessage}
-        </div>
-      {:else if podError && !podName}
-        <div class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-3 text-sm text-destructive">
-          {podError}
-        </div>
-      {:else if podName}
-        {#key podName}
-          <LogViewer
-            namespace={namespace}
-            podName={podName}
-            pods={[podName]}
-            retryNotFound={isBuildActive(build.status)}
-          />
-        {/key}
+  <div class="flex flex-wrap items-center gap-2">
+    <button
+      type="button"
+      onclick={() => (paused ? resume() : (paused = true))}
+      class="inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-xs font-medium hover:bg-accent"
+    >
+      {#if paused}
+        <Play class="h-3 w-3" />
+        Resume{pausedCount > 0 ? ` (${pausedCount})` : ''}
+      {:else}
+        <Pause class="h-3 w-3" />
+        Pause
       {/if}
+    </button>
+    <button
+      type="button"
+      onclick={reconnect}
+      class="inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-xs font-medium hover:bg-accent"
+    >
+      <RefreshCw class="h-3 w-3" />
+      Reconnect
+    </button>
+    <div class="ml-auto flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+      <span class="tabular-nums">{formatClock($liveClock)}</span>
+      <span
+        class="live-dot {status === 'streaming'
+          ? 'text-emerald-500'
+          : status === 'error'
+            ? 'text-destructive'
+            : status === 'ended'
+              ? 'text-muted-foreground'
+              : 'text-amber-500'}"
+      ></span>
+      <span>{statusHint}</span>
     </div>
+  </div>
+
+  {#if errorMsg && (status === 'error' || status === 'reconnecting')}
+    <p class="flex items-start gap-2 rounded-md bg-destructive/10 p-2.5 text-xs text-destructive">
+      <AlertCircle class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span>{errorMsg}</span>
+    </p>
+  {/if}
+
+  <div
+    bind:this={logEl}
+    onscroll={onScroll}
+    class="log-surface log-console overflow-y-auto rounded-lg border p-2 font-mono text-xs leading-relaxed"
+  >
+    {#if lines.length === 0}
+      <p class="px-1 py-2 text-zinc-500">{statusHint}</p>
+    {:else}
+      {#each lines as line, i (i)}
+        <LogLineRow
+          timestamp={line.timestamp}
+          source={line.podName === 'idp' || line.podName === 'event' ? line.podName : ''}
+          sourceClass={line.podName === 'idp' ? 'text-sky-400' : line.podName === 'event' ? 'text-violet-400' : ''}
+          message={line.message}
+        />
+      {/each}
+    {/if}
+  </div>
+
+  <div class="flex items-center justify-between text-[11px] text-muted-foreground">
+    <span>{lines.length} line{lines.length === 1 ? '' : 's'} · live stream</span>
+    {#if !autoScroll}
+      <button
+        type="button"
+        onclick={() => { autoScroll = true; scrollToBottom(); }}
+        class="font-medium text-primary hover:underline"
+      >
+        Jump to latest
+      </button>
+    {/if}
   </div>
 </div>

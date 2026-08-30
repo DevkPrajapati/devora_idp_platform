@@ -15,25 +15,30 @@ import (
 
 // Service exposes discovered database workloads for the UI.
 type Service struct {
-	k8s        *kubernetes.Client
-	discoverer *dbadmin.Discoverer
+	k8s *kubernetes.Client
 }
 
-// NewService creates a database browser service. A nil client means no cluster
-// is reachable; List degrades to connected=false rather than panicking.
+// NewService creates a database browser service. A nil or unbound client means
+// no cluster is reachable; List degrades to connected=false rather than panicking.
 func NewService(k8s *kubernetes.Client) *Service {
-	var discoverer *dbadmin.Discoverer
-	if k8s != nil {
-		discoverer = dbadmin.NewDiscoverer(k8s.Clientset)
+	return &Service{k8s: k8s}
+}
+
+// liveDiscoverer reads the clientset at call time. Caching it at construction
+// left this page disconnected after the fleet rebound the live cluster — the
+// sidebar showed "development" while ListDatabases still reported connected=false.
+func (s *Service) liveDiscoverer() *dbadmin.Discoverer {
+	if s == nil || s.k8s == nil || !s.k8s.Available() {
+		return nil
 	}
-	return &Service{k8s: k8s, discoverer: discoverer}
+	return dbadmin.NewDiscoverer(s.k8s.Clientset)
 }
 
 func (s *Service) requireCluster(ctx context.Context) error {
 	if _, err := auth.UserFromContext(ctx); err != nil {
 		return connect.NewError(connect.CodeUnauthenticated, err)
 	}
-	if s.k8s == nil || s.discoverer == nil {
+	if s.liveDiscoverer() == nil {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
 	}
 	return nil
@@ -47,11 +52,12 @@ func (s *Service) ListDatabases(
 	if _, err := auth.UserFromContext(ctx); err != nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, err)
 	}
-	if s.k8s == nil || s.discoverer == nil {
+	discoverer := s.liveDiscoverer()
+	if discoverer == nil {
 		return &idpv1.ListDatabasesResponse{Connected: false}, nil
 	}
 
-	instances, err := s.discoverer.List(ctx, req.Namespace)
+	instances, err := discoverer.List(ctx, req.Namespace)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -224,7 +230,11 @@ func (s *Service) EnsureDatabasePersistence(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("namespace and name are required"))
 	}
 
-	instance, err := s.discoverer.Get(ctx, req.Namespace, req.Name)
+	discoverer := s.liveDiscoverer()
+	if discoverer == nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
+	}
+	instance, err := discoverer.Get(ctx, req.Namespace, req.Name)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, err)
 	}
@@ -268,7 +278,11 @@ func (s *Service) resolveReady(
 	ctx context.Context,
 	namespace, name string,
 ) (*dbadmin.Instance, dbadmin.Credentials, error) {
-	instance, err := s.discoverer.Get(ctx, namespace, name)
+	discoverer := s.liveDiscoverer()
+	if discoverer == nil {
+		return nil, dbadmin.Credentials{}, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
+	}
+	instance, err := discoverer.Get(ctx, namespace, name)
 	if err != nil {
 		return nil, dbadmin.Credentials{}, connect.NewError(connect.CodeNotFound, err)
 	}
@@ -284,7 +298,7 @@ func (s *Service) resolveReady(
 		Container: instance.Container,
 		Port:      instance.Port,
 	}
-	creds, err := s.discoverer.Credentials(ctx, ref, instance.Engine)
+	creds, err := discoverer.Credentials(ctx, ref, instance.Engine)
 	if err != nil {
 		return nil, dbadmin.Credentials{}, connect.NewError(
 			connect.CodeFailedPrecondition,
@@ -310,7 +324,11 @@ func (s *Service) dial(
 	ctx context.Context,
 	namespace, name string,
 ) (*dbadmin.Instance, dbadmin.Credentials, string, int32, func(), error) {
-	instance, err := s.discoverer.Get(ctx, namespace, name)
+	discoverer := s.liveDiscoverer()
+	if discoverer == nil {
+		return nil, dbadmin.Credentials{}, "", 0, nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("kubernetes cluster not connected"))
+	}
+	instance, err := discoverer.Get(ctx, namespace, name)
 	if err != nil {
 		return nil, dbadmin.Credentials{}, "", 0, nil, connect.NewError(connect.CodeNotFound, err)
 	}
@@ -327,7 +345,7 @@ func (s *Service) dial(
 		Container: instance.Container,
 		Port:      instance.Port,
 	}
-	creds, err := s.discoverer.Credentials(ctx, ref, instance.Engine)
+	creds, err := discoverer.Credentials(ctx, ref, instance.Engine)
 	if err != nil {
 		return nil, dbadmin.Credentials{}, "", 0, nil, connect.NewError(
 			connect.CodeFailedPrecondition,

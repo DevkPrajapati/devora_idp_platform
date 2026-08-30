@@ -46,7 +46,11 @@ type RolloutInfo struct {
 // reads exactly this. How far back it goes is governed by the Deployment's
 // revisionHistoryLimit (default 10), not by anything the platform controls.
 func (c *Client) ListRollouts(ctx context.Context, namespace, name string) ([]RolloutInfo, error) {
-	deployment, err := c.Clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	deployment, err := cs.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("get deployment: %w", err)
 	}
@@ -103,12 +107,16 @@ func (c *Client) ListRollouts(ctx context.Context, namespace, name string) ([]Ro
 // in the same namespace, and rolling back onto one of those would swap in a
 // completely unrelated pod template.
 func (c *Client) ownedReplicaSets(ctx context.Context, deployment *appsv1.Deployment) ([]appsv1.ReplicaSet, error) {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
 	selector, err := metav1.LabelSelectorAsSelector(deployment.Spec.Selector)
 	if err != nil {
 		return nil, fmt.Errorf("build selector: %w", err)
 	}
 
-	list, err := c.Clientset.AppsV1().ReplicaSets(deployment.Namespace).List(ctx, metav1.ListOptions{
+	list, err := cs.AppsV1().ReplicaSets(deployment.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: selector.String(),
 	})
 	if err != nil {
@@ -133,7 +141,11 @@ func (c *Client) ownedReplicaSets(ctx context.Context, deployment *appsv1.Deploy
 // revision 0 selects the most recent revision that is not the current one.
 // Returns the revision that was rolled back to.
 func (c *Client) RollbackDeployment(ctx context.Context, namespace, name string, revision int64) (int64, error) {
-	api := c.Clientset.AppsV1().Deployments(namespace)
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return 0, csErr
+	}
+	api := cs.AppsV1().Deployments(namespace)
 
 	deployment, err := api.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {

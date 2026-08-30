@@ -31,6 +31,16 @@ message Namespace {
   string updated_at = 11;
   // Slug of the owning project, empty when the namespace is unattached.
   string project_slug = 12;
+  // Whether the namespace still exists in the connected cluster.
+  //
+  // The platform's namespace records and the cluster can diverge — a namespace
+  // deleted with kubectl, or a cluster rebuilt underneath the platform, leaves
+  // a record describing something that is gone. Reporting that explicitly lets
+  // the UI mark the row instead of offering drill-downs that can only fail.
+  bool exists_in_cluster = 13;
+  // Whether exists_in_cluster could be determined. False when no cluster is
+  // connected, so the UI can say "unknown" rather than "missing".
+  bool cluster_checked = 14;
 }
 
 message CreateNamespaceRequest {

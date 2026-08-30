@@ -157,6 +157,10 @@ func BuildDockerConfigJSON(cred RegistryCredential) ([]byte, error) {
 // one namespace. It is idempotent so credential edits, namespace additions and
 // pre-deploy reconciliation can all call it without special-casing.
 func (c *Client) EnsureRegistrySecret(ctx context.Context, namespace string, cred RegistryCredential) error {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
 	payload, err := BuildDockerConfigJSON(cred)
 	if err != nil {
 		return err
@@ -181,7 +185,7 @@ func (c *Client) EnsureRegistrySecret(ctx context.Context, namespace string, cre
 		Data: map[string][]byte{corev1.DockerConfigJsonKey: payload},
 	}
 
-	secrets := c.Clientset.CoreV1().Secrets(namespace)
+	secrets := cs.CoreV1().Secrets(namespace)
 	_, err = secrets.Create(ctx, secret, metav1.CreateOptions{})
 	if err == nil {
 		return nil
@@ -229,8 +233,12 @@ func (c *Client) EnsureRegistrySecret(ctx context.Context, namespace string, cre
 // already-absent Secret is not an error, so deleting a credential that was
 // never materialised in some namespace still succeeds.
 func (c *Client) DeleteRegistrySecret(ctx context.Context, namespace, credentialName string) error {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
 	name := RegistrySecretName(credentialName)
-	err := c.Clientset.CoreV1().Secrets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	err := cs.CoreV1().Secrets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete registry secret %s/%s: %w", namespace, name, err)
 	}
@@ -240,7 +248,11 @@ func (c *Client) DeleteRegistrySecret(ctx context.Context, namespace, credential
 // ListManagedRegistrySecrets returns the platform-managed pull Secret names
 // present in a namespace, sorted for deterministic output.
 func (c *Client) ListManagedRegistrySecrets(ctx context.Context, namespace string) ([]string, error) {
-	list, err := c.Clientset.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	list, err := cs.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: LabelManagedBy + "=true",
 	})
 	if err != nil {
@@ -265,6 +277,10 @@ func (c *Client) ListManagedRegistrySecrets(ctx context.Context, namespace strin
 // application namespaces where the registry feature materialised them, so the
 // push credential has to be copied rather than referenced.
 func (c *Client) CopyRegistrySecret(ctx context.Context, secretName, targetNamespace string) error {
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return csErr
+	}
 	source, err := c.findRegistrySecret(ctx, secretName)
 	if err != nil {
 		return err
@@ -285,7 +301,7 @@ func (c *Client) CopyRegistrySecret(ctx context.Context, secretName, targetNames
 		},
 	}
 
-	api := c.Clientset.CoreV1().Secrets(targetNamespace)
+	api := cs.CoreV1().Secrets(targetNamespace)
 	_, createErr := api.Create(ctx, desired, metav1.CreateOptions{})
 	if createErr == nil {
 		return nil
@@ -315,7 +331,11 @@ func (c *Client) CopyRegistrySecret(ctx context.Context, secretName, targetNames
 
 // findRegistrySecret locates a managed pull Secret by name in any namespace.
 func (c *Client) findRegistrySecret(ctx context.Context, secretName string) (*corev1.Secret, error) {
-	list, err := c.Clientset.CoreV1().Secrets(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return nil, csErr
+	}
+	list, err := cs.CoreV1().Secrets(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
 		LabelSelector: LabelManagedBy + "=true",
 	})
 	if err != nil {
@@ -365,7 +385,11 @@ func MergeImagePullSecrets(existing []corev1.LocalObjectReference, managed []str
 // imagePullSecrets, and updating the Secret alone would never reach it.
 // Returns the number of Deployments actually changed.
 func (c *Client) SyncImagePullSecrets(ctx context.Context, namespace string, managed []string) (int, error) {
-	deployments := c.Clientset.AppsV1().Deployments(namespace)
+	cs, csErr := c.cs()
+	if csErr != nil {
+		return 0, csErr
+	}
+	deployments := cs.AppsV1().Deployments(namespace)
 	list, err := deployments.List(ctx, metav1.ListOptions{LabelSelector: LabelManagedBy + "=true"})
 	if err != nil {
 		return 0, fmt.Errorf("list deployments for pull secret sync: %w", err)

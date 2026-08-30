@@ -14,8 +14,25 @@ service ClusterService {
   // Streams log lines as the container writes them. The stream stays open
   // until the client disconnects or the container exits.
   rpc StreamPodLogs(StreamPodLogsRequest) returns (stream LogLine);
+  // Streams provisioner output (kind/minikube create, stop, restart) plus
+  // live node logs and Kubernetes events for a fleet cluster. LogLine.pod_name
+  // is the source: provision, lifecycle, node, or event.
+  rpc StreamClusterLogs(StreamClusterLogsRequest) returns (stream LogLine);
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
   rpc GetResourceMetrics(GetResourceMetricsRequest) returns (GetResourceMetricsResponse);
+  // Live cluster namespaces — the same set `kubectl get ns` returns.
+  rpc ListClusterNamespaces(ListClusterNamespacesRequest) returns (ListClusterNamespacesResponse);
+  // Workloads, networking, config and storage inside one namespace.
+  rpc GetNamespaceResources(GetNamespaceResourcesRequest) returns (GetNamespaceResourcesResponse);
+
+  // Fleet: admin-managed Kubernetes clusters. Create/stop/restart/delete are
+  // admin-only; listing is readable so the console can show which cluster is live.
+  rpc ListClusters(ListClustersRequest) returns (ListClustersResponse);
+  rpc CreateCluster(CreateClusterRequest) returns (ManagedCluster);
+  rpc ActivateCluster(ActivateClusterRequest) returns (ManagedCluster);
+  rpc StopCluster(StopClusterRequest) returns (ManagedCluster);
+  rpc RestartCluster(RestartClusterRequest) returns (ManagedCluster);
+  rpc DeleteCluster(DeleteClusterRequest) returns (DeleteClusterResponse);
 }
 
 message GetOverviewRequest {}
@@ -50,6 +67,42 @@ message ListEventsResponse {
   repeated ClusterEvent events = 1;
 }
 
+// ContainerInfo is one container inside a pod — the level where a workload
+// actually fails. A pod reported as "Running" can hold a container stuck in
+// CrashLoopBackOff or ImagePullBackOff, so the reason and probe configuration
+// have to be reported per container or the failure is invisible.
+message ContainerInfo {
+  string name = 1;
+  string image = 2;
+  // Whether the readiness probe passes, and therefore whether Services will
+  // send traffic here.
+  bool ready = 3;
+  // Running, Waiting or Terminated.
+  string state = 4;
+  // Why the container is in that state: CrashLoopBackOff, ImagePullBackOff,
+  // OOMKilled, Completed, Error. Empty for a healthy running container.
+  string reason = 5;
+  string message = 6;
+  int32 restart_count = 7;
+  // Requests and limits as written on the container. An empty request is the
+  // reason the scheduler cannot make a placement decision for this workload
+  // and the reason it is first to be evicted under pressure.
+  string cpu_request = 8;
+  string memory_request = 9;
+  string cpu_limit = 10;
+  string memory_limit = 11;
+  // Probes decide whether a pod receives traffic and whether it is restarted.
+  // A container with neither will be sent traffic before it can serve it.
+  bool has_liveness_probe = 12;
+  bool has_readiness_probe = 13;
+  bool has_startup_probe = 14;
+  string started_at = 15;
+  // Exit code of the last termination. Meaningful only when state is
+  // Terminated or the container has restarted.
+  int32 last_exit_code = 16;
+  string last_termination_reason = 17;
+}
+
 message PodInfo {
   string name = 1;
   string namespace = 2;
@@ -58,10 +111,29 @@ message PodInfo {
   string node = 5;
   int32 restart_count = 6;
   string created_at = 7;
+  repeated ContainerInfo containers = 8;
+  // Raw pod phase, kept separate from status because status folds container
+  // level problems into a single display value.
+  string phase = 9;
+  // Pod level failure reason, such as Evicted, or the reason a pod cannot be
+  // scheduled — which is what a node at its pod capacity produces.
+  string reason = 10;
+  string message = 11;
+  // True when every container passes its readiness probe.
+  bool ready = 12;
+  // Guaranteed, Burstable or BestEffort. Derived by Kubernetes from requests
+  // and limits, and it decides eviction order under node pressure.
+  string qos_class = 13;
+  // Set when the pod is not scheduled onto any node, carrying the scheduler's
+  // explanation — "Insufficient cpu", "too many pods", and so on.
+  string scheduling_message = 14;
 }
 
 message ListPodsRequest {
   string namespace = 1;
+  // When set, only pods with label app=<app> are returned — the selector
+  // Deployments uses, so the live-log viewer can follow one workload.
+  string app = 2;
 }
 
 message ListPodsResponse {
@@ -126,6 +198,31 @@ message NodeInfo {
   string memory_capacity = 5;
   string cpu_allocatable = 6;
   string memory_allocatable = 7;
+  // Pod capacity is a hard per-node ceiling independent of CPU and memory:
+  // once pod_count reaches pod_capacity the scheduler rejects further pods
+  // with "too many pods" no matter how idle the node is.
+  int32 pod_capacity = 8;
+  int32 pod_count = 9;
+  // Sum of the requests of the pods placed here. This, not live usage, is what
+  // the scheduler compares against allocatable when placing a pod.
+  string cpu_requests = 10;
+  string memory_requests = 11;
+  // Percentages of allocatable already requested, so a node close to refusing
+  // new work is visible without the caller doing quantity arithmetic.
+  int32 cpu_requests_percent = 12;
+  int32 memory_requests_percent = 13;
+  int32 pods_percent = 14;
+  string kubelet_version = 15;
+  // True when the node is cordoned, so it keeps its pods but takes no new ones.
+  bool unschedulable = 16;
+  // Conditions that are currently true and adverse: MemoryPressure,
+  // DiskPressure, PIDPressure, NetworkUnavailable. A node under pressure
+  // evicts pods and stops accepting new ones.
+  repeated string pressure_conditions = 17;
+  string created_at = 18;
+  // Why the node is not ready, taken from the Ready condition's message. A
+  // kubelet that has stopped posting heartbeats reports it here.
+  string status_message = 19;
 }
 
 message ListNodesRequest {}
@@ -143,4 +240,117 @@ message GetResourceMetricsResponse {
   string memory_requests = 4;
   string memory_capacity = 5;
   int32 memory_usage_percent = 6;
+}
+
+// ClusterNamespace is a live Kubernetes namespace, not an IDP tenant row.
+message ClusterNamespace {
+  string name = 1;
+  // Active or Terminating — the Namespace.Status.Phase value.
+  string phase = 2;
+  string created_at = 3;
+  map<string, string> labels = 4;
+  // True when the platform created it (label idp.platform/managed=true).
+  bool managed = 5;
+  // tenant, system, or cluster. Drives badges in the explorer UI.
+  string kind = 6;
+  string display_name = 7;
+}
+
+message ListClusterNamespacesRequest {}
+
+message ListClusterNamespacesResponse {
+  repeated ClusterNamespace namespaces = 1;
+}
+
+message NamespaceResource {
+  string kind = 1;
+  string name = 2;
+  string status = 3;
+  // One-line extras: ready count, ClusterIP, node name, secret type, etc.
+  string detail = 4;
+  string created_at = 5;
+}
+
+message ResourceGroup {
+  string name = 1;
+  repeated NamespaceResource items = 2;
+}
+
+message GetNamespaceResourcesRequest {
+  string name = 1;
+}
+
+message GetNamespaceResourcesResponse {
+  ClusterNamespace namespace = 1;
+  repeated ResourceGroup groups = 2;
+  int32 total_resources = 3;
+}
+
+// ManagedCluster is a Kubernetes cluster the platform can drive. Kubeconfig
+// never leaves the server — the UI sees identity, status, and capacity only.
+message ManagedCluster {
+  string id = 1;
+  string name = 2;
+  string display_name = 3;
+  // kind, minikube, or imported.
+  string provider = 4;
+  // provisioning, starting, running, stopping, stopped, error, deleting.
+  string status = 5;
+  bool active = 6;
+  bool connected = 7;
+  string server_url = 8;
+  string kubernetes_version = 9;
+  int32 node_count = 10;
+  string last_error = 11;
+  string created_by = 12;
+  string created_at = 13;
+  string updated_at = 14;
+}
+
+message ListClustersRequest {}
+
+message ListClustersResponse {
+  repeated ManagedCluster clusters = 1;
+  bool kind_available = 2;
+  bool minikube_available = 3;
+}
+
+message CreateClusterRequest {
+  string name = 1;
+  string display_name = 2;
+  // kind | minikube | imported. Empty defaults to kind.
+  string provider = 3;
+  // Required for imported. Ignored for kind/minikube.
+  string kubeconfig = 4;
+  // Optional kindest/node tag, e.g. v1.31.0. Empty uses kind's default.
+  string kubernetes_version = 5;
+  // Extra kind workers. 0 means a single control-plane node.
+  int32 worker_count = 6;
+  // When true (the default for the first cluster), the platform switches to
+  // this cluster as soon as it is running.
+  bool activate = 7;
+}
+
+message ActivateClusterRequest {
+  string id = 1;
+}
+
+message StopClusterRequest {
+  string id = 1;
+}
+
+message RestartClusterRequest {
+  string id = 1;
+}
+
+message DeleteClusterRequest {
+  string id = 1;
+}
+
+message DeleteClusterResponse {}
+
+message StreamClusterLogsRequest {
+  string id = 1;
+  int32 tail_lines = 2;
+  bool follow = 3;
 }

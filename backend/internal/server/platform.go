@@ -73,8 +73,8 @@ func platformHandler(
 			AuthIssuer:            cfg.Auth.Issuer,
 			IngressEnabled:        cfg.Kubernetes.IngressEnabled,
 			IngressDomain:         cfg.Kubernetes.IngressDomain,
-			BuildsEnabled:         cfg.Build.Enabled && k8sClient != nil,
-			ClusterConnected:      k8sClient != nil && clusterReachable(k8sClient),
+			BuildsEnabled:         cfg.Build.Enabled && k8sClient.Available(),
+			ClusterConnected:      k8sClient.Available() && clusterReachable(k8sClient),
 			History:               history.Snapshot(),
 			SampleIntervalSeconds: int(metrics.DefaultInterval.Seconds()),
 		}
@@ -83,7 +83,7 @@ func platformHandler(
 		// should see the new version without restarting the platform. A failed
 		// lookup leaves the field empty so the UI can say "unknown" instead of
 		// showing a stale value.
-		if k8sClient != nil {
+		if k8sClient.Available() {
 			if v, err := k8sClient.Clientset.Discovery().ServerVersion(); err == nil {
 				resp.KubernetesVersion = v.GitVersion
 			}
@@ -96,6 +96,9 @@ func platformHandler(
 }
 
 func clusterReachable(client *kubernetes.Client) bool {
+	if !client.Available() {
+		return false
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	return client.Ping(ctx) == nil
